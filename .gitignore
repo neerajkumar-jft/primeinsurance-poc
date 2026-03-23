@@ -1,0 +1,21 @@
+# OS files
+.DS_Store
+*.swp
+*.swo
+
+# Data dictionary and images (not needed in repo)
+data/*.xlsx
+data/*.webp
+data/autoinsurancedata/New folder/
+
+# Screenshots (too large for git)
+screenshots/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Environment
+.env
+.env.local
