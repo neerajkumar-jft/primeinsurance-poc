@@ -1,0 +1,148 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Star Schema" id="star-schema-1">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="PrimeInsurance Gold Layer - Star Schema" style="text;html=1;fontSize=20;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="500" y="10" width="600" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== FACT_CLAIMS (center left) ==================== -->
+        <mxCell id="fc_header" value="fact_claims" style="shape=mxgraph.er.entity;whiteSpace=wrap;fillColor=#FF6666;fontColor=#FFFFFF;fontStyle=1;fontSize=14;strokeColor=#B85450;" vertex="1" parent="1">
+          <mxGeometry x="250" y="250" width="300" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="fc_body" value="claim_id  INT  (degenerate dim)&#xa;policy_key  INT  (FK → dim_policies)&#xa;customer_key  INT  (FK → dim_customers)&#xa;car_key  INT  (FK → dim_cars)&#xa;incident_date_key  INT  (FK → dim_date)&#xa;logged_date_key  INT  (FK → dim_date)&#xa;───── measures ─────&#xa;injury  DOUBLE&#xa;property_amount  DOUBLE&#xa;vehicle  DOUBLE&#xa;total_claim_amount  DOUBLE&#xa;days_to_process  INT&#xa;is_rejected  BOOLEAN&#xa;───── degenerate dims ─────&#xa;incident_type  STRING&#xa;incident_severity  STRING&#xa;collision_type  STRING&#xa;incident_state  STRING&#xa;incident_city  STRING" style="text;html=0;whiteSpace=wrap;fillColor=#FFE6E6;strokeColor=#B85450;fontSize=11;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="250" y="290" width="300" height="340" as="geometry"/>
+        </mxCell>
+        <mxCell id="fc_grain" value="Grain: one row per claim" style="text;html=0;fontSize=10;fontStyle=2;align=center;" vertex="1" parent="1">
+          <mxGeometry x="275" y="632" width="250" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== FACT_SALES (center right) ==================== -->
+        <mxCell id="fs_header" value="fact_sales" style="shape=mxgraph.er.entity;whiteSpace=wrap;fillColor=#FF6666;fontColor=#FFFFFF;fontStyle=1;fontSize=14;strokeColor=#B85450;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="250" width="300" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="fs_body" value="sales_id  INT  (degenerate dim)&#xa;car_key  INT  (FK → dim_cars)&#xa;date_key  INT  (FK → dim_date)&#xa;sold_date_key  INT  (FK → dim_date)&#xa;───── measures ─────&#xa;original_selling_price  DOUBLE&#xa;days_on_market  INT&#xa;is_sold  BOOLEAN&#xa;───── degenerate dims ─────&#xa;region  STRING&#xa;state  STRING&#xa;city  STRING&#xa;seller_type  STRING&#xa;owner  STRING" style="text;html=0;whiteSpace=wrap;fillColor=#FFE6E6;strokeColor=#B85450;fontSize=11;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="290" width="300" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="fs_grain" value="Grain: one row per sales listing" style="text;html=0;fontSize=10;fontStyle=2;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1075" y="552" width="250" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== DIM_CUSTOMERS (top left) ==================== -->
+        <mxCell id="dc_header" value="dim_customers" style="shape=mxgraph.er.entity;whiteSpace=wrap;fillColor=#6699CC;fontColor=#FFFFFF;fontStyle=1;fontSize=13;strokeColor=#336699;" vertex="1" parent="1">
+          <mxGeometry x="10" y="60" width="220" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="dc_body" value="customer_key  INT (PK)&#xa;customer_id  INT (BK)&#xa;region  STRING&#xa;state  STRING&#xa;city  STRING&#xa;job  STRING&#xa;education  STRING&#xa;marital_status  STRING&#xa;default_flag  INT&#xa;balance  INT&#xa;hh_insurance  INT&#xa;car_loan  INT&#xa;&#xa;Source: silver.customers_unified" style="text;html=0;whiteSpace=wrap;fillColor=#DAE8FC;strokeColor=#336699;fontSize=10;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="10" y="95" width="220" height="230" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== DIM_POLICIES (top center) ==================== -->
+        <mxCell id="dp_header" value="dim_policies" style="shape=mxgraph.er.entity;whiteSpace=wrap;fillColor=#6699CC;fontColor=#FFFFFF;fontStyle=1;fontSize=13;strokeColor=#336699;" vertex="1" parent="1">
+          <mxGeometry x="340" y="60" width="220" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="dp_body" value="policy_key  INT (PK)&#xa;policy_number  INT (BK)&#xa;policy_bind_date  DATE&#xa;policy_state  STRING&#xa;policy_csl  STRING&#xa;policy_deductible  INT&#xa;policy_annual_premium  DOUBLE&#xa;umbrella_limit  INT&#xa;&#xa;Source: silver.policy_cleaned" style="text;html=0;whiteSpace=wrap;fillColor=#DAE8FC;strokeColor=#336699;fontSize=10;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="340" y="95" width="220" height="175" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== DIM_DATE (top right) ==================== -->
+        <mxCell id="dd_header" value="dim_date" style="shape=mxgraph.er.entity;whiteSpace=wrap;fillColor=#6699CC;fontColor=#FFFFFF;fontStyle=1;fontSize=13;strokeColor=#336699;" vertex="1" parent="1">
+          <mxGeometry x="690" y="60" width="220" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="dd_body" value="date_key  INT (PK, YYYYMMDD)&#xa;full_date  DATE&#xa;year  INT&#xa;quarter  INT&#xa;month  INT&#xa;month_name  STRING&#xa;day_of_week  INT&#xa;day_name  STRING&#xa;is_weekend  BOOLEAN&#xa;&#xa;Source: generated (2010-2030)" style="text;html=0;whiteSpace=wrap;fillColor=#DAE8FC;strokeColor=#336699;fontSize=10;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="690" y="95" width="220" height="190" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== DIM_CARS (bottom center) ==================== -->
+        <mxCell id="dcar_header" value="dim_cars" style="shape=mxgraph.er.entity;whiteSpace=wrap;fillColor=#6699CC;fontColor=#FFFFFF;fontStyle=1;fontSize=13;strokeColor=#336699;" vertex="1" parent="1">
+          <mxGeometry x="640" y="680" width="220" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="dcar_body" value="car_key  INT (PK)&#xa;car_id  INT (BK)&#xa;name  STRING&#xa;km_driven  INT&#xa;fuel  STRING&#xa;transmission  STRING&#xa;mileage_kmpl  DOUBLE&#xa;engine_cc  INT&#xa;max_power_bhp  DOUBLE&#xa;torque_nm  DOUBLE&#xa;torque_rpm  INT&#xa;seats  INT&#xa;model  STRING&#xa;&#xa;Source: silver.cars_cleaned" style="text;html=0;whiteSpace=wrap;fillColor=#DAE8FC;strokeColor=#336699;fontSize=10;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="640" y="715" width="220" height="250" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== RELATIONSHIP ARROWS ==================== -->
+
+        <!-- fact_claims -> dim_customers -->
+        <mxCell id="rel1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#336699;" edge="1" parent="1" source="fc_body" target="dc_body">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="rel1_label" value="customer_key" style="edgeLabel;fontSize=9;fontStyle=2;" vertex="1" connectable="0" parent="rel1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- fact_claims -> dim_policies -->
+        <mxCell id="rel2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#336699;" edge="1" parent="1" source="fc_header" target="dp_body">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="rel2_label" value="policy_key" style="edgeLabel;fontSize=9;fontStyle=2;" vertex="1" connectable="0" parent="rel2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- fact_claims -> dim_date (incident) -->
+        <mxCell id="rel3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#336699;" edge="1" parent="1" source="fc_body" target="dd_body">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="rel3_label" value="incident_date_key&#xa;logged_date_key" style="edgeLabel;fontSize=9;fontStyle=2;" vertex="1" connectable="0" parent="rel3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- fact_claims -> dim_cars -->
+        <mxCell id="rel4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#336699;" edge="1" parent="1" source="fc_body" target="dcar_body">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="rel4_label" value="car_key" style="edgeLabel;fontSize=9;fontStyle=2;" vertex="1" connectable="0" parent="rel4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- fact_sales -> dim_cars -->
+        <mxCell id="rel5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#336699;" edge="1" parent="1" source="fs_body" target="dcar_body">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="rel5_label" value="car_key" style="edgeLabel;fontSize=9;fontStyle=2;" vertex="1" connectable="0" parent="rel5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- fact_sales -> dim_date -->
+        <mxCell id="rel6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#336699;" edge="1" parent="1" source="fs_header" target="dd_body">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="rel6_label" value="date_key&#xa;sold_date_key" style="edgeLabel;fontSize=9;fontStyle=2;" vertex="1" connectable="0" parent="rel6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ==================== BUSINESS VIEWS (bottom) ==================== -->
+        <mxCell id="views_header" value="Business views" style="text;html=1;fontSize=14;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="680" width="300" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="views_body" value="vw_claims_processing&#xa;  → avg processing time vs 7-day benchmark&#xa;&#xa;vw_regulatory_customer_count&#xa;  → deduplicated count by region&#xa;&#xa;vw_revenue_leakage&#xa;  → unsold inventory &gt; 60 days by model&#xa;&#xa;vw_claims_by_policy_type&#xa;  → rejection rate by CSL tier &amp; region" style="text;html=0;whiteSpace=wrap;fillColor=#E6FFE6;strokeColor=#669966;fontSize=10;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="710" width="300" height="180" as="geometry"/>
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend_fact" value="" style="fillColor=#FFE6E6;strokeColor=#B85450;" vertex="1" parent="1">
+          <mxGeometry x="10" y="860" width="20" height="15" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_fact_text" value="Fact tables" style="text;html=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="35" y="857" width="80" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_dim" value="" style="fillColor=#DAE8FC;strokeColor=#336699;" vertex="1" parent="1">
+          <mxGeometry x="120" y="860" width="20" height="15" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_dim_text" value="Dimension tables" style="text;html=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="145" y="857" width="100" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_view" value="" style="fillColor=#E6FFE6;strokeColor=#669966;" vertex="1" parent="1">
+          <mxGeometry x="260" y="860" width="20" height="15" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_view_text" value="Business views" style="text;html=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="285" y="857" width="100" height="20" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,199 @@
+<mxfile host="app.diagrams.net" modified="2026-03-23T12:00:00.000Z" agent="5.0" etag="primeins-dataflow" version="21.0.0" type="device">
+  <diagram id="dataflow" name="End-to-End Data Flow">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="PrimeInsurance Data Platform — End-to-End Data Flow" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=22;fontStyle=1;fontColor=#1a1a2e;" vertex="1" parent="1">
+          <mxGeometry x="300" y="20" width="1000" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="Catalog: prime_insurance_jellsinki_poc | Databricks Intelligence Data Platform" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="400" y="55" width="800" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- Source Files Row -->
+        <mxCell id="src_label" value="SOURCE SYSTEMS (6 Regional Acquisitions)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontStyle=1;fontColor=#999999;letterSpacing=2;" vertex="1" parent="1">
+          <mxGeometry x="400" y="90" width="800" height="20" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="src1" value="&lt;b&gt;Customers&lt;/b&gt;&lt;br&gt;7 CSV files&lt;br&gt;~3,610 records&lt;br&gt;6 different schemas" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="120" y="120" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="src2" value="&lt;b&gt;Claims&lt;/b&gt;&lt;br&gt;2 JSON files&lt;br&gt;1,000 records&lt;br&gt;corrupted dates" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="290" y="120" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="src3" value="&lt;b&gt;Policy&lt;/b&gt;&lt;br&gt;1 CSV file&lt;br&gt;1,000 records" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="460" y="120" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="src4" value="&lt;b&gt;Sales&lt;/b&gt;&lt;br&gt;3 CSV files&lt;br&gt;~4,982 records&lt;br&gt;mixed date formats" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="630" y="120" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="src5" value="&lt;b&gt;Cars&lt;/b&gt;&lt;br&gt;1 CSV file&lt;br&gt;2,500 records" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="800" y="120" width="150" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrow to Volumes -->
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="src3" target="volumes">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a1_label" value="Upload to Volumes&#xa;(preserving regional folders)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="a1">
+          <mxGeometry x="-0.1" relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Volumes -->
+        <mxCell id="volumes" value="&lt;b&gt;Unity Catalog Volumes (bronze schema)&lt;/b&gt;&lt;br&gt;bronze.customers/ | bronze.claims/ | bronze.policy/ | bronze.sales/ | bronze.cars/" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="200" y="230" width="670" height="45" as="geometry"/>
+        </mxCell>
+
+        <!-- DLT Pipeline Container -->
+        <mxCell id="dlt_container" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#FF5722;strokeWidth=3;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="310" width="970" height="530" as="geometry"/>
+        </mxCell>
+        <mxCell id="dlt_badge" value="Delta Live Tables Pipeline (Scheduled Nightly)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FF5722;fontColor=#FFFFFF;strokeColor=#FF5722;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="330" y="295" width="340" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrow Volumes to Bronze -->
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="volumes" target="br1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Bronze Layer -->
+        <mxCell id="bronze_label" value="BRONZE — Raw Ingestion" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=11;fontStyle=1;fontColor=#e65100;letterSpacing=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="330" width="300" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="br1" value="&lt;b&gt;raw_customers_1..7&lt;/b&gt;&lt;br&gt;Auto Loader&lt;br&gt;+ _source_file&lt;br&gt;+ _ingestion_timestamp" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ff9800;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="355" width="155" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="br2" value="&lt;b&gt;raw_claims_1..2&lt;/b&gt;&lt;br&gt;JSON ingestion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ff9800;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="250" y="355" width="140" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="br3" value="&lt;b&gt;raw_policy&lt;/b&gt;&lt;br&gt;CSV ingestion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ff9800;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="405" y="355" width="120" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="br4" value="&lt;b&gt;raw_sales_1..3&lt;/b&gt;&lt;br&gt;Auto Loader" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ff9800;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="540" y="355" width="130" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="br5" value="&lt;b&gt;raw_cars&lt;/b&gt;&lt;br&gt;CSV ingestion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ff9800;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="685" y="355" width="120" height="65" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrow Bronze to Silver -->
+        <mxCell id="a3" value="DLT Expectations fire here" style="edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;fontColor=#666;" edge="1" parent="1" source="br3" target="sv1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Silver Layer -->
+        <mxCell id="silver_label" value="SILVER — Quality &amp; Harmonization" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=11;fontStyle=1;fontColor=#283593;letterSpacing=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="445" width="350" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="sv1" value="&lt;b&gt;customers_harmonized&lt;/b&gt;&lt;br&gt;7 sources unified" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8eaf6;strokeColor=#5c6bc0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="470" width="145" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="sv2" value="&lt;b&gt;customers_unified&lt;/b&gt;&lt;br&gt;Deduplicated registry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8eaf6;strokeColor=#5c6bc0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="240" y="470" width="140" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="sv3" value="&lt;b&gt;claims_cleaned&lt;/b&gt;&lt;br&gt;Dates parsed, ?→NULL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8eaf6;strokeColor=#5c6bc0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="395" y="470" width="140" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="sv4" value="&lt;b&gt;sales_cleaned&lt;/b&gt;&lt;br&gt;Dates, unsold flagged" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8eaf6;strokeColor=#5c6bc0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="550" y="470" width="140" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="sv5" value="&lt;b&gt;cars_cleaned&lt;/b&gt;&lt;br&gt;Standardized" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8eaf6;strokeColor=#5c6bc0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="705" y="470" width="110" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Quarantine -->
+        <mxCell id="quarantine" value="&lt;b&gt;Quarantine Tables&lt;/b&gt;&lt;br&gt;quarantine_customers | quarantine_claims | quarantine_sales&lt;br&gt;Failed records + reason + timestamp + _source_file" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#e91e63;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="540" width="530" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrow Silver to Gold -->
+        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="sv3" target="gd1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Gold Layer -->
+        <mxCell id="gold_label" value="GOLD — Star Schema" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=11;fontStyle=1;fontColor=#f57f17;letterSpacing=1;" vertex="1" parent="1">
+          <mxGeometry x="380" y="610" width="250" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="gd1" value="&lt;b&gt;dim_customers&lt;/b&gt;&lt;br&gt;is_duplicate, source_count" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#ffc107;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="635" width="145" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="gd2" value="&lt;b&gt;dim_policies&lt;/b&gt;&lt;br&gt;customer+car FK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#ffc107;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="240" y="635" width="120" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="gd3" value="&lt;b&gt;dim_cars&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#ffc107;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="375" y="635" width="90" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="gd4" value="&lt;b&gt;dim_date&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#ffc107;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="480" y="635" width="80" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="gd5" value="&lt;b&gt;fact_claims&lt;/b&gt;&lt;br&gt;days_to_process&lt;br&gt;is_rejected" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#ffc107;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="575" y="635" width="120" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="gd6" value="&lt;b&gt;fact_sales&lt;/b&gt;&lt;br&gt;days_to_sell&lt;br&gt;is_aging" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#ffc107;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="710" y="635" width="110" height="45" as="geometry"/>
+        </mxCell>
+
+        <!-- Views -->
+        <mxCell id="views" value="&lt;b&gt;Business Views:&lt;/b&gt; vw_customer_360 | vw_claims_processing | vw_aging_inventory | vw_revenue_leakage | vw_regulatory_customer_count" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#ffc107;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="120" y="695" width="700" height="35" as="geometry"/>
+        </mxCell>
+
+        <!-- AI Output Tables -->
+        <mxCell id="ai_tables" value="&lt;b&gt;AI Output Tables:&lt;/b&gt; ai_quality_reports | ai_claims_alerts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#4caf50;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="300" y="745" width="330" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrow Gold to SQL Warehouse -->
+        <mxCell id="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="views" target="sqlwh">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- SQL Warehouse -->
+        <mxCell id="sqlwh" value="&lt;b&gt;Serverless SQL Warehouse&lt;/b&gt;&lt;br&gt;Auto-scaling | SELECT on gold only | 20+ concurrent users" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2f1;strokeColor=#009688;fontSize=11;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="280" y="870" width="380" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Consumers -->
+        <mxCell id="a6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="sqlwh" target="c1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="sqlwh" target="c2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="sqlwh" target="c3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="sqlwh" target="c4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="consumer_label" value="BUSINESS USERS" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=11;fontStyle=1;fontColor=#999;letterSpacing=2;" vertex="1" parent="1">
+          <mxGeometry x="380" y="940" width="200" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="c1" value="&lt;b&gt;Dashboards&lt;/b&gt;&lt;br&gt;Claims, Inventory&lt;br&gt;Revenue tracking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e5f5;strokeColor=#9c27b0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="100" y="970" width="140" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="c2" value="&lt;b&gt;AI/BI&lt;/b&gt;&lt;br&gt;Natural language&lt;br&gt;querying (no SQL)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#4caf50;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="270" y="970" width="140" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="c3" value="&lt;b&gt;GenAI Notebooks&lt;/b&gt;&lt;br&gt;Quality explanations&lt;br&gt;Claims investigation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#4caf50;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="440" y="970" width="150" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="c4" value="&lt;b&gt;Ad-hoc SQL&lt;/b&gt;&lt;br&gt;SQL Editor&lt;br&gt;Tableau, Power BI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e5f5;strokeColor=#9c27b0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="620" y="970" width="140" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Unity Catalog Governance Bar -->
+        <mxCell id="uc_bar" value="&lt;b&gt;Unity Catalog&lt;/b&gt; — Governance Layer (spans everything above): Catalog &amp; Discovery | Access Control | Automatic Column-Level Lineage | Table/Column Comments" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eceff1;strokeColor=#607d8b;fontSize=11;dashed=1;dashPattern=8 4;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1060" width="860" height="40" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
