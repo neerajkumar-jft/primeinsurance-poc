@@ -1,0 +1,20 @@
+Entity,Issue Found,Region / File
+customers,"Three different ID column names: CustomerID (files 1,4,5,6,7), Customer_ID (file 2), cust_id (file 3). Bronze has all three as separate columns. Each record has one filled, the other two NULL.",All 7 files across all regions
+customers,"Region column named ""Reg"" instead of ""Region""",customers_1 (Insurance 1)
+customers,"City column named ""City_in_state"" instead of ""City""",customers_2 (Insurance 2)
+customers,"Education column named ""Edu"" instead of ""Education""",customers_2 (Insurance 2)
+customers,"Marital status split across two column names: ""Marital_status"" in files 1 and 6, ""Marital"" in all others","customers_1 (Insurance 1), customers_6 (Insurance 6)"
+customers,"Missing columns vary by file: no Job in customers_1, no HHInsurance or Marital in customers_2, no Education in customers_4. Show as NULL in Bronze.","Insurance 1, 2, 4"
+customers,"Abbreviated region values: W, C, E, S instead of West, Central, East, South",customers_5 (Insurance 5)
+customers,"Typo in Education: ""terto"" instead of ""tertiary""",customers_5 (Insurance 5)
+customers,"Duplicate CustomerIDs across files with different Job values (e.g. 100006, 100013)",customers_7 + customers_1
+claims,"Corrupted dates: incident_date, Claim_Logged_On, Claim_Processed_On have values like ""27:00.0"" and ""34:00.0"". Excel serial date fragments mangled during export.","claims_1 (Insurance 6), claims_2 (root)"
+claims,"""?"" placeholder in property_damage and police_report_available instead of null or YES/NO",Both claims files
+claims,"Literal string ""NULL"" in Claim_Processed_On for rejected claims instead of actual null",Both claims files
+claims,"All fields stored as strings in JSON source. Numbers like ""8500"" for injury, ""1"" for vehicles involved. No proper numeric types.",Both claims files
+policy,"Clean. Dates are YYYY-MM-DD, column names consistent, numerics inferred correctly. No structural issues found.",policy.csv (Insurance 5)
+sales,"Dates in DD-MM-YYYY HH:MM format, not ISO. Need parsing to proper timestamps.","All 3 sales files (Insurance 1, 2, 3)"
+sales,"Empty sold_on for unsold inventory. Stored as empty strings, not proper NULLs.","sales_1 (Insurance 2), Sales_2 (Insurance 1)"
+sales,"Trailing empty rows, entirely commas, junk from CSV export","sales_1 (Insurance 2), Sales_2 (Insurance 1)"
+cars,"Units embedded in numeric columns: mileage = ""23.4 kmpl"", engine = ""1248 CC"", max_power = ""74 bhp"", torque = ""190Nm@ 2000rpm""",cars.csv (Insurance 4)
+cars,"Torque format inconsistent across records, RPM notation varies",cars.csv (Insurance 4)

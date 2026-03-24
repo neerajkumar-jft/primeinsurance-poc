@@ -1,0 +1,32 @@
+Table,Rule,What triggers it
+customers,customer_id must not be null,"COALESCE(CustomerID, Customer_ID, cust_id) IS NULL"
+customers,region must not be null,"COALESCE(Region, Reg) IS NULL after abbreviation expansion"
+customers,default_flag must be 0 or 1,"default_flag NOT IN (0, 1)"
+customers,balance must be non-negative,balance < 0
+customers,no rescued data from schema mismatch,_rescued_data IS NOT NULL
+claims,claim_id must not be null,ClaimID IS NULL
+claims,policy_id must not be null,PolicyID IS NULL
+claims,incident_date must not be null after parsing,"incident_date IS NULL or was string ""NULL"" before parsing"
+claims,claim_rejected must be Y or N,"Claim_Rejected NOT IN ('Y', 'N')"
+claims,injury amount must be non-negative,injury < 0
+claims,number_of_vehicles must be positive,number_of_vehicles_involved <= 0
+claims,no rescued data,_rescued_data IS NOT NULL
+policy,policy_number must not be null,policy_number IS NULL
+policy,customer_id must not be null,customer_id IS NULL
+policy,car_id must not be null,car_id IS NULL
+policy,policy_bind_date must not be null,policy_bind_date IS NULL
+policy,premium must be positive,policy_annual_premium <= 0
+policy,no rescued data,_rescued_data IS NOT NULL
+sales,sales_id must not be null,sales_id IS NULL
+sales,car_id must not be null,car_id IS NULL
+sales,ad_placed_on must not be null,ad_placed_on IS NULL
+sales,price must be positive,original_selling_price <= 0
+sales,region must not be null,Region IS NULL
+sales,sold_on must be after ad_placed_on if present,sold_on IS NOT NULL AND sold_on < ad_placed_on
+sales,no rescued data,_rescued_data IS NOT NULL
+cars,car_id must not be null,car_id IS NULL
+cars,name must not be null,name IS NULL
+cars,km_driven must be non-negative,km_driven < 0
+cars,fuel must be a known type,"fuel NOT IN ('Diesel', 'Petrol', 'LPG', 'CNG', 'Electric')"
+cars,seats must be between 2 and 10,seats < 2 OR seats > 10
+cars,no rescued data,_rescued_data IS NOT NULL
