@@ -1,0 +1,449 @@
+# Databricks notebook source
+
+# COMMAND ----------
+
+%pip install openai mlflow tenacity pydantic --quiet
+
+# COMMAND ----------
+
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# ============================================================
+# CONFIGURATION & SETUP
+# ============================================================
+
+import mlflow
+import json
+import hashlib
+import re
+from datetime import datetime
+from openai import OpenAI
+from tenacity import retry, stop_after_attempt, wait_random_exponential
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Optional
+
+# ── MLflow Tracing ──
+mlflow.openai.autolog()
+
+# ── LLM Connection ──
+DATABRICKS_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+WORKSPACE_URL = spark.conf.get("spark.databricks.workspaceUrl")
+
+client = OpenAI(
+    api_key=DATABRICKS_TOKEN,
+    base_url=f"https://{WORKSPACE_URL}/serving-endpoints"
+)
+
+# ── Auto-detect catalog ──
+CATALOG = "prime-ins-jellsinki-poc"
+spark.sql(f"USE CATALOG `{CATALOG}`")
+
+# ── Constants ──
+MODEL_NAME = "databricks-gpt-oss-20b"
+MAX_TOKENS = 1500
+SOURCE_TABLE = f"`{CATALOG}`.silver.dq_issues"
+OUTPUT_TABLE = f"`{CATALOG}`.gold.dq_explanation_report"
+PROMPT_VERSION = "v2"
+
+print(f"Connected to {WORKSPACE_URL}")
+print(f"Model: {MODEL_NAME}")
+print(f"Source: {SOURCE_TABLE}")
+print(f"Output: {OUTPUT_TABLE}")
+
+# COMMAND ----------
+
+# ── Response parser for databricks-gpt-oss-20b ──
+def extract_text(raw_response):
+    """Extracts the text block from the model's structured response format."""
+    if isinstance(raw_response, list):
+        parsed = raw_response
+    elif isinstance(raw_response, str):
+        try:
+            parsed = json.loads(raw_response)
+        except json.JSONDecodeError:
+            return raw_response
+    else:
+        return str(raw_response)
+
+    for block in parsed:
+        if block.get("type") == "text":
+            return block["text"]
+    return str(raw_response)
+
+
+# ── LLM call with retry + JSON mode enforced ──
+@retry(
+    wait=wait_random_exponential(min=2, max=60),
+    stop=stop_after_attempt(5),
+)
+def call_llm(messages, max_tokens=MAX_TOKENS):
+    """Calls LLM with JSON mode enforced. Returns parsed dict."""
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=messages,
+        max_tokens=max_tokens,
+        # response_format={"type": "json_object"},
+    )
+    raw = response.choices[0].message.content
+    text = extract_text(raw)
+    return json.loads(text)
+
+
+# ── Hash function for incremental change detection ──
+def hash_issue(issue):
+    """Creates MD5 hash of issue content to detect changes."""
+    content = f"{issue['rule_name']}|{issue['severity']}|{issue['records_affected']}|{issue['affected_ratio']}|{issue['suggested_fix']}"
+    return hashlib.md5(content.encode()).hexdigest()
+
+
+# ── Output guardrails ──
+def apply_guardrails(text):
+    """Redacts PII patterns from LLM output."""
+    text = re.sub(r'\b[\w.-]+@[\w.-]+\.\w+\b', '[REDACTED_EMAIL]', text)
+    text = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[REDACTED_PHONE]', text)
+    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]', text)
+    return text
+
+
+print(f"Connected to {WORKSPACE_URL}")
+print(f"Model: {MODEL_NAME} (JSON mode enforced)")
+print(f"Source: {SOURCE_TABLE}")
+print(f"Output: {OUTPUT_TABLE}")
+
+# COMMAND ----------
+
+class DQExplanation(BaseModel):
+    """Validated, structured explanation for a data quality issue."""
+
+    what_was_found: str = Field(min_length=20)
+    why_it_matters: str = Field(min_length=20)
+    what_caused_it: str = Field(min_length=20)
+    what_was_done: str = Field(min_length=20)
+    how_to_prevent: str = Field(min_length=20)
+
+    @field_validator('*', mode='before')
+    @classmethod
+    def clean_input(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            if v.lower() in ('n/a', 'none', 'null', '', '-'):
+                return "[Not provided by model — requires manual review]"
+        return v
+
+    def to_formatted_text(self) -> str:
+        return (
+            f"1. WHAT WAS FOUND:\n{self.what_was_found}\n\n"
+            f"2. WHY IT MATTERS:\n{self.why_it_matters}\n\n"
+            f"3. WHAT CAUSED IT:\n{self.what_caused_it}\n\n"
+            f"4. WHAT WAS DONE:\n{self.what_was_done}\n\n"
+            f"5. HOW TO PREVENT RECURRENCE:\n{self.how_to_prevent}"
+        )
+
+print("Pydantic model ready")
+
+# COMMAND ----------
+
+# ============================================================
+# PROMPT DEFINITION
+# ============================================================
+
+SYSTEM_PROMPT = """You are a senior data quality analyst at PrimeInsurance with 15 years of experience in P&C insurance data management. PrimeInsurance acquired 6 regional insurance
+operators — each had its own databases, formats, and naming conventions. Nothing was ever unified.
+
+Your job: translate technical DQ issues into plain business English for the compliance team.
+
+<severity_definitions>
+- CRITICAL: Data is unusable or creates regulatory risk. Immediate action required.
+- HIGH: Data is unreliable for business decisions. Action needed within days.
+- MEDIUM: Data has inconsistencies that could cause confusion. Should be fixed in next sprint.
+- LOW: Minor formatting issue. Fix when convenient.
+</severity_definitions>
+
+You must always respond in json format with exactly these 5 keys:
+{
+    "what_was_found": "2-3 sentences describing the issue in plain English",
+    "why_it_matters": "2-3 sentences on business impact",
+    "what_caused_it": "2-3 sentences on root cause",
+    "what_was_done": "2-3 sentences on what the pipeline did",
+    "how_to_prevent": "2-3 sentences on prevention"
+}
+
+<constraints>
+- Respond with ONLY the json object, nothing else
+- Do NOT add any keys other than the 5 listed above
+- Do NOT use "N/A" — write a real explanation for every field
+- Do NOT invent data not in the issue details
+- Reference actual numbers and file names from the issue
+</constraints>"""
+
+
+USER_PROMPT_TEMPLATE = """
+<example>
+Issue: DQ-099 | Table: customers | Column: Region | Rule: value_abbreviation | Severity: MEDIUM | Affected: 199 (5.2%) | Fix: Expand W->West | Source: customers_6.csv
+
+Response:
+{{
+    "what_was_found": "In customers_6.csv, 199 customer records use single-letter region codes ('W', 'C', 'E', 'S') instead of full region names. This affects 5.2% of total customer
+records.",
+    "why_it_matters": "Region-based compliance reports will show mismatched categories — 'W' and 'West' appear as separate regions, inflating the region count and skewing per-region
+customer totals used in regulatory filings.",
+    "what_caused_it": "The regional operator acquired as Insurance 6 used an older database system with a single-character Region field. When PrimeInsurance received the data export, the
+abbreviations were preserved as-is.",
+    "what_was_done": "The pipeline's Silver layer detected the abbreviated values and expanded them to full region names. The original values were preserved in the Bronze layer for audit
+traceability.",
+    "how_to_prevent": "Add a region validation rule at the ingestion layer that rejects or auto-maps any value not in the approved list. Provide the mapping table to all regional data
+providers."
+}}
+</example>
+
+Now explain this issue:
+
+- Entity: {entity}
+- Rule: {rule_name}
+- Severity: {severity}
+- Affected Records: {records_affected} out of {total_records} ({affected_ratio:.1%} of records)
+- Suggested Fix: {suggested_fix}"""
+
+
+print(f"Prompt defined — System: {len(SYSTEM_PROMPT)} chars")
+
+# COMMAND ----------
+
+# ============================================================
+# INCREMENTAL LOADING — Only process new/changed issues
+# ============================================================
+
+all_issues = [row.asDict() for row in spark.sql(f"SELECT * FROM {SOURCE_TABLE} ORDER BY severity").collect()]
+print(f"Total issues in {SOURCE_TABLE}: {len(all_issues)}")
+
+# Load previously processed hashes
+processed_map = {}
+try:
+    processed_rows = [row.asDict() for row in spark.sql(f"SELECT issue_id, issue_hash FROM {OUTPUT_TABLE}").collect()]
+    processed_map = {r['issue_id']: r['issue_hash'] for r in processed_rows}
+    print(f"Previously processed: {len(processed_map)} issues")
+except Exception:
+    print(f"No existing {OUTPUT_TABLE} — first run, will process all")
+
+# Determine new/changed issues
+new_issues = []
+skipped = []
+
+for issue in all_issues:
+    current_hash = hash_issue(issue)
+    if f"DQ-{all_issues.index(issue)+1:04d}" not in processed_map or processed_map[f"DQ-{all_issues.index(issue)+1:04d}"] != current_hash:
+        new_issues.append(issue)
+    else:
+        skipped.append(issue)
+
+print(f"\nIncremental Status:")
+print(f"   New/Changed → {len(new_issues)} (will process)")
+print(f"   Unchanged   → {len(skipped)} (will skip)")
+
+if len(new_issues) == 0:
+    print("All explanations are up to date. Nothing to process.")
+
+# COMMAND ----------
+
+# ============================================================
+# GENERATE AI EXPLANATIONS — with MLflow tracking
+# ============================================================
+
+if len(new_issues) == 0:
+    print("Skipping — no new issues to process.")
+    results = []
+else:
+    current_user = spark.sql("SELECT current_user()").collect()[0][0]
+    mlflow.set_experiment(f"/Users/{current_user}/prime_ins_poc_dq_explainer")
+
+    results = []
+
+    with mlflow.start_run(run_name=f"dq_explainer_{datetime.now().strftime('%Y%m%d_%H%M')}") as run:
+
+        mlflow.set_tags({
+            "model": MODEL_NAME,
+            "prompt_version": PROMPT_VERSION,
+            "pipeline": "dq_explainer",
+            "source_table": SOURCE_TABLE,
+            "output_table": OUTPUT_TABLE,
+        })
+        mlflow.log_params({
+            "max_tokens": MAX_TOKENS,
+            "total_issues": len(all_issues),
+            "new_issues": len(new_issues),
+            "skipped_issues": len(skipped),
+            "prompt_version": PROMPT_VERSION,
+            "model": MODEL_NAME,
+            # "response_format": "json_object",
+        })
+
+        success_count = 0
+        fail_count = 0
+
+        for idx, issue in enumerate(new_issues):
+            issue_start = datetime.now()
+
+            try:
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": USER_PROMPT_TEMPLATE.format(**issue)},
+                ]
+
+                # Call LLM — returns dict (JSON mode enforced)
+                data = call_llm(messages)
+
+                # Validate with Pydantic
+                explanation = DQExplanation(**data)
+
+                # Apply guardrails on the formatted output
+                formatted = apply_guardrails(explanation.to_formatted_text())
+
+                duration_ms = int((datetime.now() - issue_start).total_seconds() * 1000)
+
+                results.append({
+                    "issue_id": f"DQ-{idx+1:04d}",
+                    "entity": issue["entity"],
+                                        "rule_name": issue["rule_name"],
+                    "severity": issue["severity"],
+                    "affected_ratio": float(issue["affected_ratio"]),
+                    "affected_ratio": float(issue["affected_ratio"]),
+                    "records_affected": int(issue["records_affected"]),
+                    "total_records": int(issue["total_records"]),
+                    "what_was_found": explanation.what_was_found,
+                    "why_it_matters": explanation.why_it_matters,
+                    "what_caused_it": explanation.what_caused_it,
+                    "what_was_done": explanation.what_was_done,
+                    "how_to_prevent": explanation.how_to_prevent,
+                    "ai_explanation": formatted,
+                    "issue_hash": hash_issue(issue),
+                    "model_name": MODEL_NAME,
+                    "prompt_version": PROMPT_VERSION,
+                    "generated_at": datetime.now().isoformat(),
+                    "generation_status": "SUCCESS",
+                    "duration_ms": duration_ms,
+                })
+
+                success_count += 1
+                print(f"[{idx+1}/{len(new_issues)}] {f"DQ-{all_issues.index(issue)+1:04d}"} | {issue['severity']:8s} | {issue['entity']}.{issue['rule_name']} — {duration_ms}ms")
+
+            except Exception as e:
+                fail_count += 1
+                duration_ms = int((datetime.now() - issue_start).total_seconds() * 1000)
+
+                results.append({
+                    "issue_id": f"DQ-{idx+1:04d}",
+                    "entity": issue["entity"],
+                                        "rule_name": issue["rule_name"],
+                    "severity": issue["severity"],
+                    "affected_ratio": float(issue["affected_ratio"]),
+                    "affected_ratio": float(issue["affected_ratio"]),
+                    "records_affected": int(issue["records_affected"]),
+                    "total_records": int(issue["total_records"]),
+                    "what_was_found": f"Generation failed: {str(e)}",
+                    "why_it_matters": "",
+                    "what_caused_it": "",
+                    "what_was_done": "",
+                    "how_to_prevent": "",
+                    "ai_explanation": f"Generation failed: {str(e)}",
+                    "issue_hash": hash_issue(issue),
+                    "model_name": MODEL_NAME,
+                    "prompt_version": PROMPT_VERSION,
+                    "generated_at": datetime.now().isoformat(),
+                    "generation_status": "FAILED",
+                    "duration_ms": duration_ms,
+                })
+                print(f"[{idx+1}/{len(new_issues)}] {f"DQ-{all_issues.index(issue)+1:04d}"} | Error: {e}")
+
+        total_duration = sum(r["duration_ms"] for r in results)
+        mlflow.log_metrics({
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "success_rate": success_count / len(new_issues) if new_issues else 0,
+            "total_duration_ms": total_duration,
+            "avg_duration_ms": total_duration / len(results) if results else 0,
+            "critical_issues": sum(1 for r in results if r["severity"] == "CRITICAL"),
+            "high_issues": sum(1 for r in results if r["severity"] == "HIGH"),
+        })
+
+        print(f"\n{'='*60}")
+        print(f"  RESULTS: {success_count} succeeded, {fail_count} failed")
+        print(f"  Total time: {total_duration/1000:.1f}s | Avg: {total_duration/len(results)/1000:.1f}s/issue")
+        print(f"  MLflow Run: {run.info.run_id}")
+        print(f"{'='*60}")
+
+# COMMAND ----------
+
+# ============================================================
+# PREVIEW EXPLANATIONS
+# ============================================================
+
+if results:
+    for r in results:
+        severity_icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}.get(r["severity"], "⚪")
+        print("=" * 70)
+        print(f"  {severity_icon} {r['issue_id']} | {r['severity']} | {r['entity']}.{r['rule_name']}")
+        print(f"  Rule: {r['rule_name']} | Status: {r['generation_status']} | Time: {r['duration_ms']}ms")
+        print("=" * 70)
+        print(r["ai_explanation"])
+        print()
+else:
+    print("No new results to preview.")
+
+# COMMAND ----------
+
+# ============================================================
+# SAVE TO GOLD — Incremental MERGE (upsert)
+# ============================================================
+
+if results:
+    new_df = spark.createDataFrame(results)
+    table_exists = spark.catalog.tableExists(OUTPUT_TABLE)
+
+    if not table_exists:
+        new_df.write.mode("overwrite").saveAsTable(OUTPUT_TABLE)
+        print(f"✅ Created {OUTPUT_TABLE} with {len(results)} rows")
+    else:
+        new_df.createOrReplaceTempView("new_explanations")
+        spark.sql(f"""
+            MERGE INTO {OUTPUT_TABLE} AS target
+            USING new_explanations AS source
+            ON target.issue_id = source.issue_id
+            WHEN MATCHED THEN UPDATE SET *
+            WHEN NOT MATCHED THEN INSERT *
+        """)
+        print(f"✅ Merged {len(results)} rows into {OUTPUT_TABLE}")
+
+    total = spark.sql(f"SELECT COUNT(*) as cnt FROM {OUTPUT_TABLE}").collect()[0]["cnt"]
+    print(f"📊 Total rows in {OUTPUT_TABLE}: {total}")
+else:
+    print("⏭No new results to save.")
+
+# COMMAND ----------
+
+# ============================================================
+# VERIFY FINAL OUTPUT
+# ============================================================
+
+display(spark.sql(f"""
+    SELECT
+        issue_id,
+        severity,
+        entity,
+        rule_name,
+        generation_status,
+        duration_ms,
+        prompt_version,
+        LEFT(what_was_found, 120) as finding_preview,
+        LEFT(how_to_prevent, 120) as prevention_preview
+    FROM {OUTPUT_TABLE}
+    ORDER BY
+        CASE severity
+            WHEN 'CRITICAL' THEN 1
+            WHEN 'HIGH' THEN 2
+            WHEN 'MEDIUM' THEN 3
+            WHEN 'LOW' THEN 4
+        END,
+        issue_id
+"""))
