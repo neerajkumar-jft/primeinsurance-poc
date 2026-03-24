@@ -1,0 +1,31 @@
+# Gold layer - Issues, resolutions, and additional work
+
+## Issues and resolutions
+
+### Issue 1: Multi-schema DLT pipelines not supported in Unity Catalog
+
+We tried combining bronze, silver, and gold into a single DLT pipeline with schema prefixes on table names (e.g. bronze.raw_customers, silver.customers_harmonized). DLT ignored the prefixes and placed everything in the pipeline's target schema. Then we tried removing the target schema entirely, but DLT UC requires it.
+
+Resolution: three separate pipelines, each targeting its own schema. Cross-layer reads use fully qualified names (e.g. prime_insurance_jellsinki_poc.silver.claims_cleaned). Dimension lookups within the gold pipeline use LIVE. references since they're in the same pipeline.
+
+### Issue 2: Claims to customers join path goes through policy
+
+Claims don't reference customer_id or car_id directly. They reference policy_id. To get customer_key and car_key on fact_claims, we join claims_cleaned -> policy_cleaned (for customer_id, car_id) -> dim_customers (for customer_key) -> dim_cars (for car_key). If a policy references a customer or car that was quarantined in silver, the INNER JOIN drops the claim. The EXPECT constraint on valid_customer_key catches this and logs it.
+
+### Issue 3: days_on_market changes without new data
+
+fact_sales.days_on_market for unsold inventory uses current_date(). This means the value increases by 1 every day the pipeline runs, even without new sales data. This is intentional. Unsold cars age over time, and the revenue leakage view needs to reflect current aging, not the aging as of when the listing was first loaded.
+
+## Beyond what was asked
+
+1. dim_date is a generated calendar dimension covering 2010-2030 with YYYYMMDD integer keys. It's used as a role-playing dimension: incident_date_key and logged_date_key on fact_claims, date_key and sold_date_key on fact_sales. Four references to the same dimension from two fact tables.
+
+2. loss_ratio in vw_claims_by_policy_type is calculated as total_claim_value / total_premiums. This gives actuarial insight beyond just rejection rates. A policy tier with a low rejection rate but a high loss ratio is still a problem.
+
+3. at_risk_revenue in vw_revenue_leakage sums the listed prices of all unsold cars past 60 days. This quantifies the revenue leakage problem in dollars, not just counts. Management can see "we have $2.3M sitting in aging inventory in the East region" rather than just "47 unsold cars."
+
+4. vw_regulatory_customer_count includes a TOTAL row so auditors get the company-wide deduplicated count and the regional breakdown in a single query without needing UNION or separate queries.
+
+5. Referential integrity is enforced at pipeline time via DLT EXPECT constraints on fact table surrogate keys (valid_policy_key, valid_customer_key, valid_car_key). Orphan rows where dimension lookups fail get dropped and logged in the DLT event log rather than silently producing NULL keys in the fact table.
+
+6. total_claim_amount uses COALESCE(injury, 0) + COALESCE(property_amount, 0) + COALESCE(vehicle, 0) so a NULL in one component doesn't make the total NULL. A claim with injury=8500 and property=NULL still has total_claim_amount=8500, not NULL.
