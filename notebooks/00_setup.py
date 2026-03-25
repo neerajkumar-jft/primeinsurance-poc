@@ -12,18 +12,24 @@
 # COMMAND ----------
 
 # MAGIC %sql
+# MAGIC CREATE CATALOG IF NOT EXISTS `databricks-hackathon-insurance`
+# MAGIC COMMENT 'PrimeInsurance Data Intelligence Platform';
+
+# COMMAND ----------
+
+# MAGIC %sql
 # MAGIC USE CATALOG `databricks-hackathon-insurance`;
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE SCHEMA IF NOT EXISTS bronze
+# MAGIC CREATE SCHEMA IF NOT EXISTS `databricks-hackathon-insurance`.bronze
 # MAGIC COMMENT 'Raw ingested data from all 6 regional insurance systems';
 # MAGIC
-# MAGIC CREATE SCHEMA IF NOT EXISTS silver
+# MAGIC CREATE SCHEMA IF NOT EXISTS `databricks-hackathon-insurance`.silver
 # MAGIC COMMENT 'Cleaned and harmonized data with quality rules applied';
 # MAGIC
-# MAGIC CREATE SCHEMA IF NOT EXISTS gold
+# MAGIC CREATE SCHEMA IF NOT EXISTS `databricks-hackathon-insurance`.gold
 # MAGIC COMMENT 'Star schema facts/dims, aggregations, and GenAI output tables';
 
 # COMMAND ----------

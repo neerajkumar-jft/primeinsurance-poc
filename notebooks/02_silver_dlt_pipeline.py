@@ -3,67 +3,97 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Silver Layer - DLT Pipeline with Expectations
+# MAGIC # Silver Layer — DLT Pipeline
+# MAGIC Cleans, standardizes, and applies quality rules to Bronze data.
 # MAGIC
-# MAGIC This is the DLT version of our Silver transformations.
-# MAGIC Uses DLT Expectations for declarative data quality enforcement.
-# MAGIC
-# MAGIC DLT Expectations give us 3 modes:
-# MAGIC - `expect()` -> track quality metrics, keep all records
-# MAGIC - `expect_or_drop()` -> drop bad records (they go to event log)
-# MAGIC - `expect_or_fail()` -> pipeline fails if ANY record violates
-# MAGIC
-# MAGIC We use expect_or_drop for most rules (route bad data out)
-# MAGIC and expect for soft rules (track but don't block).
+# MAGIC ## What Silver Does:
+# MAGIC - Unifies inconsistent column names across regional files
+# MAGIC - Normalizes values (region abbreviations, education typos)
+# MAGIC - Fixes corrupted data (Excel serial dates in claims)
+# MAGIC - Replaces sentinel values ("NULL", "?") with actual nulls
+# MAGIC - Casts string columns to proper types (int, double, date)
+# MAGIC - Applies DLT Expectations (quality rules) — bad records are dropped or flagged
+# MAGIC - Quarantine tables preserve failed records for compliance review
+# MAGIC - Adds business metrics: sla_breach, processing_days, days_on_lot, aging_flag
 
 # COMMAND ----------
 
 import dlt
-from pyspark.sql import functions as F
+from pyspark.sql.functions import (
+    col, when, coalesce, trim, lower, upper,
+    current_timestamp, lit, regexp_replace, regexp_extract,
+    to_date, to_timestamp, expr, concat, date_add, datediff,
+    current_date, initcap
+)
+from pyspark.sql.types import IntegerType, DoubleType, DateType
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Silver Customers
-# MAGIC
-# MAGIC Most complex transformation: standardize, deduplicate, resolve identity.
+# MAGIC ---
+# MAGIC ## 1. Silver Customers
+# MAGIC Unifies 7 customer files with different schemas into one clean table.
+# MAGIC - Merges 3 ID columns → customer_id
+# MAGIC - Merges Region/Reg + normalizes W/E/S/C → full names
+# MAGIC - Merges Education/Edu + fixes typo terto → tertiary
+# MAGIC - Merges Marital/Marital_status
+# MAGIC - Merges City/City_in_state
 
 # COMMAND ----------
 
 @dlt.table(
-    name="silver_customers_clean",
-    comment="Cleaned, standardized, deduplicated customer records"
+    name="silver_customers",
+    comment="Cleaned and standardized customer data. Columns unified, regions normalized, typos fixed.",
+    table_properties={"quality": "silver"}
 )
-@dlt.expect("customer_id_not_null", "customer_id IS NOT NULL")
-@dlt.expect("customer_id_not_empty", "LENGTH(TRIM(customer_id)) > 0")
-@dlt.expect_or_drop("region_valid", "region IN ('East', 'West', 'North', 'South', 'Central')")
-def silver_customers_clean():
+@dlt.expect_or_drop("valid_customer_id", "customer_id IS NOT NULL")
+@dlt.expect_or_drop("valid_region", "region IN ('East', 'West', 'North', 'South', 'Central')")
+@dlt.expect("valid_education", "education IS NULL OR education IN ('primary', 'secondary', 'tertiary')")
+def silver_customers():
     return (
-        dlt.read("bronze_customers")
-        # standardize column names
-        .withColumnRenamed("CustomerID", "customer_id")
-        # normalize region values
-        .withColumn("region",
-            F.when(F.lower(F.trim(F.col("Region"))).isin("e", "east"), "East")
-             .when(F.lower(F.trim(F.col("Region"))).isin("w", "west"), "West")
-             .when(F.lower(F.trim(F.col("Region"))).isin("n", "north"), "North")
-             .when(F.lower(F.trim(F.col("Region"))).isin("s", "south"), "South")
-             .when(F.lower(F.trim(F.col("Region"))).isin("c", "central"), "Central")
-             .otherwise(F.initcap(F.trim(F.col("Region"))))
+        spark.readStream.table("`databricks-hackathon-insurance`.bronze.bronze_customers")
+        # 1. Unify customer ID columns (3 different names → 1)
+        .withColumn("customer_id",
+            coalesce(
+                col("CustomerID"),
+                col("Customer_ID"),
+                col("cust_id")
+            ).cast(IntegerType())
         )
-        .withColumn("state", F.upper(F.trim(F.col("State"))))
-        .withColumn("city", F.initcap(F.trim(F.col("City"))))
-        .withColumn("job", F.initcap(F.trim(F.col("Job"))))
-        .withColumn("marital", F.initcap(F.trim(F.col("Marital"))))
-        .withColumn("education", F.initcap(F.trim(F.col("Education"))))
-        .withColumn("balance", F.col("Balance").cast("integer"))
-        .withColumn("has_default", F.col("Default").cast("integer"))
-        .withColumn("hh_insurance", F.col("HHInsurance").cast("integer"))
-        .withColumn("car_loan", F.col("CarLoan").cast("integer"))
+        # 2. Unify region columns + normalize abbreviations
+        .withColumn("region",
+            when(coalesce(col("Region"), col("Reg")).isin("W", "w", "west"), "West")
+            .when(coalesce(col("Region"), col("Reg")).isin("E", "e", "east"), "East")
+            .when(coalesce(col("Region"), col("Reg")).isin("S", "s", "south"), "South")
+            .when(coalesce(col("Region"), col("Reg")).isin("C", "c", "central"), "Central")
+            .when(coalesce(col("Region"), col("Reg")).isin("N", "n", "north"), "North")
+            .otherwise(coalesce(col("Region"), col("Reg")))
+        )
+        # 3. Unify education + fix typo 'terto' → 'tertiary', 'NA' → null
+        .withColumn("education",
+            when(coalesce(col("Education"), col("Edu")).isin("terto"), "tertiary")
+            .when(coalesce(col("Education"), col("Edu")).isin("NA"), None)
+            .otherwise(coalesce(col("Education"), col("Edu")))
+        )
+        # 4. Unify marital status
+        .withColumn("marital_status",
+            coalesce(col("Marital"), col("Marital_status"))
+        )
+        # 5. Unify city
+        .withColumn("city",
+            initcap(trim(coalesce(col("City"), col("City_in_state"))))
+        )
+        # 6. Standardize remaining columns
+        .withColumn("state", upper(trim(col("State"))))
+        .withColumn("job", initcap(trim(col("Job"))))
+        .withColumn("default_flag", col("Default").cast(IntegerType()))
+        .withColumn("balance", col("Balance").cast(IntegerType()))
+        .withColumn("hh_insurance", col("HHInsurance").cast(IntegerType()))
+        .withColumn("car_loan", col("CarLoan").cast(IntegerType()))
         .select(
-            "customer_id", "region", "state", "city",
-            "job", "marital", "education",
-            "has_default", "balance", "hh_insurance", "car_loan",
+            "customer_id", "region", "state", "city", "job",
+            "marital_status", "education", "default_flag",
+            "balance", "hh_insurance", "car_loan",
             "_source_file", "_ingested_at"
         )
     )
@@ -71,236 +101,330 @@ def silver_customers_clean():
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Silver Claims
+# MAGIC ### Customers Quarantine
 
 # COMMAND ----------
 
 @dlt.table(
-    name="silver_claims_clean",
-    comment="Cleaned claims with standardized dates, validated amounts, processing time calculated"
+    name="silver_customers_quarantine",
+    comment="Customer records that failed quality checks. Preserved for compliance review.",
+    table_properties={"quality": "quarantine"}
 )
-@dlt.expect("claim_id_not_null", "claim_id IS NOT NULL")
-@dlt.expect("policy_id_not_null", "policy_id IS NOT NULL")
-@dlt.expect_or_drop("amounts_not_negative", "injury >= 0 AND property >= 0 AND vehicle >= 0")
-@dlt.expect("valid_incident_date", "incident_date IS NOT NULL")
-def silver_claims_clean():
+def silver_customers_quarantine():
     return (
-        dlt.read("bronze_claims")
-        .withColumnRenamed("ClaimID", "claim_id")
-        .withColumnRenamed("PolicyID", "policy_id")
-        # parse dates with multiple format attempts
-        .withColumn("incident_date",
-            F.coalesce(
-                F.expr("try_to_date(incident_date, 'yyyy-MM-dd')"),
-                F.expr("try_to_date(incident_date, 'MM/dd/yyyy')"),
-                F.expr("try_to_date(incident_date, 'dd/MM/yyyy')"),
+        spark.readStream.table("`databricks-hackathon-insurance`.bronze.bronze_customers")
+        .withColumn("customer_id",
+            coalesce(col("CustomerID"), col("Customer_ID"), col("cust_id")).cast(IntegerType())
+        )
+        .withColumn("region",
+            when(coalesce(col("Region"), col("Reg")).isin("W", "w", "west"), "West")
+            .when(coalesce(col("Region"), col("Reg")).isin("E", "e", "east"), "East")
+            .when(coalesce(col("Region"), col("Reg")).isin("S", "s", "south"), "South")
+            .when(coalesce(col("Region"), col("Reg")).isin("C", "c", "central"), "Central")
+            .when(coalesce(col("Region"), col("Reg")).isin("N", "n", "north"), "North")
+            .otherwise(coalesce(col("Region"), col("Reg")))
+        )
+        .filter(
+            (col("customer_id").isNull()) |
+            (~col("region").isin("East", "West", "North", "South", "Central"))
+        )
+        .withColumn("quarantine_reason",
+            when(col("customer_id").isNull(), "missing_customer_id")
+            .when(~col("region").isin("East", "West", "North", "South", "Central"), "invalid_region")
+            .otherwise("unknown")
+        )
+        .withColumn("quarantine_timestamp", current_timestamp())
+    )
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ---
+# MAGIC ## 2. Silver Claims
+# MAGIC Fixes the messiest table in the dataset:
+# MAGIC - Corrupted dates (Excel serial fragments like "27:00.0") → proper dates
+# MAGIC - String "NULL" / "?" → actual null
+# MAGIC - Casts amounts to proper types
+# MAGIC - Computes processing_days and sla_breach (>7 days)
+
+# COMMAND ----------
+
+@dlt.table(
+    name="silver_claims",
+    comment="Cleaned claims data. Dates fixed, NULLs resolved, SLA breach flag added.",
+    table_properties={"quality": "silver"}
+)
+@dlt.expect_or_drop("valid_claim_id", "claim_id IS NOT NULL")
+@dlt.expect_or_drop("valid_policy_id", "policy_id IS NOT NULL")
+@dlt.expect("valid_injury_amount", "injury_amount >= 0")
+@dlt.expect("valid_property_amount", "property_amount >= 0")
+@dlt.expect("valid_vehicle_amount", "vehicle_amount >= 0")
+def silver_claims():
+    df = spark.readStream.table("`databricks-hackathon-insurance`.bronze.bronze_claims")
+
+    def fix_date_col(column_name):
+        """Fix corrupted Excel serial date fragments like '27:00.0' → proper date."""
+        return (
+            when(
+                (col(column_name).isNull()) |
+                (col(column_name) == "NULL") |
+                (col(column_name) == "?") |
+                (trim(col(column_name)) == ""),
+                None
+            ).otherwise(
+                coalesce(
+                    expr(f"try_to_date(`{column_name}`, 'yyyy-MM-dd')"),
+                    expr(f"try_to_date(`{column_name}`, 'MM/dd/yyyy')"),
+                    date_add(
+                        lit("1899-12-30").cast(DateType()),
+                        regexp_extract(col(column_name), r"^(\d+)", 1).cast(IntegerType())
+                    )
+                )
             )
         )
-        .withColumn("claim_logged_on",
-            F.coalesce(
-                F.expr("try_to_date(Claim_Logged_On, 'yyyy-MM-dd')"),
-                F.expr("try_to_date(Claim_Logged_On, 'MM/dd/yyyy')"),
-            )
-        )
-        .withColumn("claim_processed_on",
-            F.coalesce(
-                F.expr("try_to_date(Claim_Processed_On, 'yyyy-MM-dd')"),
-                F.expr("try_to_date(Claim_Processed_On, 'MM/dd/yyyy')"),
-            )
-        )
-        # cast amounts
-        .withColumn("injury", F.col("injury").cast("double"))
-        .withColumn("property", F.col("property").cast("double"))
-        .withColumn("vehicle", F.col("vehicle").cast("double"))
+
+    def clean_null(column_name):
+        return when(
+            (col(column_name) == "NULL") | (col(column_name) == "?") | (trim(col(column_name)) == ""),
+            None
+        ).otherwise(col(column_name))
+
+    return (
+        df
+        .withColumn("claim_id", col("ClaimID").cast(IntegerType()))
+        .withColumn("policy_id", col("PolicyID").cast(IntegerType()))
+        .withColumn("incident_date", fix_date_col("incident_date"))
+        .withColumn("claim_logged_on", fix_date_col("Claim_Logged_On"))
+        .withColumn("claim_processed_on", fix_date_col("Claim_Processed_On"))
+        .withColumn("injury_amount", col("injury").cast(DoubleType()))
+        .withColumn("property_amount", col("property").cast(DoubleType()))
+        .withColumn("vehicle_amount", col("vehicle").cast(DoubleType()))
         .withColumn("total_claim_amount",
-            F.coalesce(F.col("injury"), F.lit(0.0)) +
-            F.coalesce(F.col("property"), F.lit(0.0)) +
-            F.coalesce(F.col("vehicle"), F.lit(0.0))
+            coalesce(col("injury_amount"), lit(0.0)) +
+            coalesce(col("property_amount"), lit(0.0)) +
+            coalesce(col("vehicle_amount"), lit(0.0))
         )
-        # calculate processing time
+        # Business metrics
         .withColumn("processing_days",
-            F.datediff(F.col("claim_processed_on"), F.col("claim_logged_on"))
+            datediff(col("claim_processed_on"), col("claim_logged_on"))
         )
         .withColumn("sla_breach",
-            F.when(F.col("processing_days") > 7, True).otherwise(False)
+            when(col("processing_days") > 7, True).otherwise(False)
         )
-        # standardize categoricals
-        .withColumn("incident_severity", F.initcap(F.trim(F.col("incident_severity"))))
-        .withColumn("incident_type", F.initcap(F.trim(F.col("incident_type"))))
+        .withColumn("bodily_injuries", col("bodily_injuries").cast(IntegerType()))
+        .withColumn("witnesses", col("witnesses").cast(IntegerType()))
+        .withColumn("num_vehicles_involved", col("number_of_vehicles_involved").cast(IntegerType()))
+        .withColumn("property_damage", clean_null("property_damage"))
+        .withColumn("police_report_available", clean_null("police_report_available"))
+        .withColumn("collision_type", clean_null("collision_type"))
+        .withColumn("authorities_contacted", clean_null("authorities_contacted"))
+        .withColumn("incident_severity", initcap(trim(col("incident_severity"))))
+        .withColumn("incident_type", initcap(trim(col("incident_type"))))
         .withColumn("claim_rejected",
-            F.when(F.upper(F.trim(F.col("Claim_Rejected"))).isin("Y", "YES", "TRUE"), "Y")
-             .when(F.upper(F.trim(F.col("Claim_Rejected"))).isin("N", "NO", "FALSE"), "N")
-             .otherwise(F.col("Claim_Rejected"))
+            when(upper(trim(col("Claim_Rejected"))).isin("Y", "YES", "TRUE"), "Y")
+            .when(upper(trim(col("Claim_Rejected"))).isin("N", "NO", "FALSE"), "N")
+            .otherwise(col("Claim_Rejected"))
+        )
+        .select(
+            "claim_id", "policy_id",
+            "incident_date", "claim_logged_on", "claim_processed_on",
+            "processing_days", "sla_breach",
+            "incident_state", "incident_city", "incident_location",
+            "incident_type", "collision_type", "incident_severity",
+            "authorities_contacted", "property_damage", "police_report_available",
+            "injury_amount", "property_amount", "vehicle_amount", "total_claim_amount",
+            "bodily_injuries", "witnesses", "num_vehicles_involved",
+            "claim_rejected",
+            "_source_file", "_ingested_at"
         )
     )
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Silver Claims - Quarantine
-# MAGIC
-# MAGIC Records that fail critical rules go here instead of being silently dropped.
-# MAGIC Compliance team can query this table to see what was rejected and why.
+# MAGIC ### Claims Quarantine
 
 # COMMAND ----------
 
 @dlt.table(
     name="silver_claims_quarantine",
-    comment="Claims records that failed quality rules - kept for audit trail"
+    comment="Claims records that failed quality checks. Preserved for compliance review.",
+    table_properties={"quality": "quarantine"}
 )
 def silver_claims_quarantine():
     return (
-        dlt.read("bronze_claims")
-        .withColumnRenamed("ClaimID", "claim_id")
-        .withColumnRenamed("PolicyID", "policy_id")
-        .withColumn("injury", F.col("injury").cast("double"))
-        .withColumn("property", F.col("property").cast("double"))
-        .withColumn("vehicle", F.col("vehicle").cast("double"))
+        spark.readStream.table("`databricks-hackathon-insurance`.bronze.bronze_claims")
+        .withColumn("claim_id", col("ClaimID").cast(IntegerType()))
+        .withColumn("policy_id", col("PolicyID").cast(IntegerType()))
+        .withColumn("injury_amount", col("injury").cast(DoubleType()))
+        .withColumn("property_amount", col("property").cast(DoubleType()))
+        .withColumn("vehicle_amount", col("vehicle").cast(DoubleType()))
         .filter(
-            # capture records that would fail our expectations
-            (F.col("claim_id").isNull()) |
-            (F.col("policy_id").isNull()) |
-            (F.col("injury") < 0) |
-            (F.col("property") < 0) |
-            (F.col("vehicle") < 0)
+            (col("claim_id").isNull()) |
+            (col("policy_id").isNull()) |
+            (col("injury_amount") < 0) |
+            (col("property_amount") < 0) |
+            (col("vehicle_amount") < 0)
         )
-        .withColumn("_quarantine_reason",
-            F.concat_ws(", ",
-                F.when(F.col("claim_id").isNull(), F.lit("claim_id_null")),
-                F.when(F.col("policy_id").isNull(), F.lit("policy_id_null")),
-                F.when(F.col("injury") < 0, F.lit("negative_injury")),
-                F.when(F.col("property") < 0, F.lit("negative_property")),
-                F.when(F.col("vehicle") < 0, F.lit("negative_vehicle")),
-            )
+        .withColumn("quarantine_reason",
+            when(col("claim_id").isNull(), "missing_claim_id")
+            .when(col("policy_id").isNull(), "missing_policy_id")
+            .when(col("injury_amount") < 0, "negative_injury")
+            .when(col("property_amount") < 0, "negative_property")
+            .when(col("vehicle_amount") < 0, "negative_vehicle")
+            .otherwise("unknown")
         )
-        .withColumn("_quarantined_at", F.current_timestamp())
+        .withColumn("quarantine_timestamp", current_timestamp())
     )
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Silver Policy
+# MAGIC ---
+# MAGIC ## 3. Silver Policy
 
 # COMMAND ----------
 
 @dlt.table(
-    name="silver_policy_clean",
-    comment="Cleaned policy data with standardized formats"
+    name="silver_policy",
+    comment="Cleaned policy data. Column names standardized, types cast.",
+    table_properties={"quality": "silver"}
 )
-@dlt.expect("policy_number_not_null", "policy_number IS NOT NULL")
-@dlt.expect("premium_positive", "policy_annual_premium > 0")
-@dlt.expect("customer_id_not_null", "customer_id IS NOT NULL")
-def silver_policy_clean():
+@dlt.expect_or_drop("valid_policy_number", "policy_number IS NOT NULL")
+@dlt.expect_or_drop("valid_customer_id", "customer_id IS NOT NULL")
+@dlt.expect_or_drop("valid_car_id", "car_id IS NOT NULL")
+@dlt.expect("valid_premium", "policy_annual_premium > 0")
+def silver_policy():
     return (
-        dlt.read("bronze_policy")
+        spark.readStream.table("`databricks-hackathon-insurance`.bronze.bronze_policy")
+        .withColumn("policy_number", col("policy_number").cast(IntegerType()))
         .withColumn("policy_bind_date",
-            F.coalesce(
-                F.expr("try_to_date(policy_bind_date, 'yyyy-MM-dd')"),
-                F.expr("try_to_date(policy_bind_date, 'MM/dd/yyyy')"),
+            coalesce(
+                expr("try_to_date(policy_bind_date, 'yyyy-MM-dd')"),
+                expr("try_to_date(policy_bind_date, 'MM/dd/yyyy')"),
+                expr("try_to_date(policy_bind_date, 'dd/MM/yyyy')"),
             )
         )
-        .withColumn("policy_state", F.upper(F.trim(F.col("policy_state"))))
-        .withColumn("policy_csl", F.trim(F.col("policy_csl")))
-        .withColumn("policy_deductable", F.col("policy_deductable").cast("integer"))
-        .withColumn("policy_annual_premium", F.col("policy_annual_premium").cast("double"))
-        .withColumn("umbrella_limit", F.col("umbrella_limit").cast("integer"))
+        .withColumn("policy_state", upper(trim(col("policy_state"))))
+        .withColumn("policy_csl", trim(col("policy_csl")))
+        .withColumn("policy_deductible", col("policy_deductable").cast(IntegerType()))
+        .withColumn("policy_annual_premium", col("policy_annual_premium").cast(DoubleType()))
+        .withColumn("umbrella_limit", col("umbrella_limit").cast(IntegerType()))
+        .withColumn("car_id", col("car_id").cast(IntegerType()))
+        .withColumn("customer_id", col("customer_id").cast(IntegerType()))
+        .select(
+            "policy_number", "policy_bind_date", "policy_state",
+            "policy_csl", "policy_deductible", "policy_annual_premium",
+            "umbrella_limit", "car_id", "customer_id",
+            "_source_file", "_ingested_at"
+        )
     )
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Silver Sales
+# MAGIC ---
+# MAGIC ## 4. Silver Sales
 
 # COMMAND ----------
 
 @dlt.table(
-    name="silver_sales_clean",
-    comment="Cleaned sales data with aging inventory flags"
+    name="silver_sales",
+    comment="Cleaned sales data. Dates parsed, days_on_lot and aging_flag added.",
+    table_properties={"quality": "silver"}
 )
-@dlt.expect("sales_id_not_null", "sales_id IS NOT NULL")
-@dlt.expect_or_drop("price_positive", "original_selling_price > 0")
-def silver_sales_clean():
+@dlt.expect_or_drop("valid_sales_id", "sales_id IS NOT NULL")
+@dlt.expect_or_drop("valid_car_id", "car_id IS NOT NULL")
+@dlt.expect("valid_price", "selling_price > 0")
+def silver_sales():
     return (
-        dlt.read("bronze_sales")
+        spark.readStream.table("`databricks-hackathon-insurance`.bronze.bronze_sales")
+        .withColumn("sales_id", col("sales_id").cast(IntegerType()))
         .withColumn("ad_placed_on",
-            F.coalesce(
-                F.expr("try_to_date(ad_placed_on, 'yyyy-MM-dd')"),
-                F.expr("try_to_date(ad_placed_on, 'MM/dd/yyyy')"),
+            coalesce(
+                expr("try_to_date(ad_placed_on, 'dd-MM-yyyy HH:mm')"),
+                expr("try_to_date(ad_placed_on, 'yyyy-MM-dd')"),
+                expr("try_to_date(ad_placed_on, 'MM/dd/yyyy')"),
             )
         )
         .withColumn("sold_on",
-            F.coalesce(
-                F.expr("try_to_date(sold_on, 'yyyy-MM-dd')"),
-                F.expr("try_to_date(sold_on, 'MM/dd/yyyy')"),
-            )
-        )
-        .withColumn("original_selling_price", F.col("original_selling_price").cast("double"))
-        .withColumn("region", F.initcap(F.trim(F.col("region"))))
-        .withColumn("state", F.upper(F.trim(F.col("state"))))
-        .withColumn("city", F.initcap(F.trim(F.col("city"))))
-        # calculate days on lot
-        .withColumn("days_on_lot",
-            F.when(F.col("sold_on").isNotNull(),
-                F.datediff(F.col("sold_on"), F.col("ad_placed_on"))
+            when(
+                (col("sold_on").isNull()) | (trim(col("sold_on")) == "") | (col("sold_on") == "NULL"),
+                None
             ).otherwise(
-                F.datediff(F.current_date(), F.col("ad_placed_on"))
+                coalesce(
+                    expr("try_to_date(sold_on, 'dd-MM-yyyy HH:mm')"),
+                    expr("try_to_date(sold_on, 'yyyy-MM-dd')"),
+                )
             )
         )
-        .withColumn("is_sold", F.col("sold_on").isNotNull())
+        .withColumn("selling_price", col("original_selling_price").cast(DoubleType()))
+        .withColumn("region", initcap(trim(col("Region"))))
+        .withColumn("state", upper(trim(col("State"))))
+        .withColumn("city", initcap(trim(col("City"))))
+        .withColumn("car_id", col("car_id").cast(IntegerType()))
+        .withColumn("is_sold", col("sold_on").isNotNull())
+        # Business metrics
+        .withColumn("days_on_lot",
+            when(col("sold_on").isNotNull(),
+                datediff(col("sold_on"), col("ad_placed_on"))
+            ).otherwise(
+                datediff(current_date(), col("ad_placed_on"))
+            )
+        )
         .withColumn("aging_flag",
-            F.when((F.col("sold_on").isNull()) & (F.datediff(F.current_date(), F.col("ad_placed_on")) > 90), "CRITICAL")
-             .when((F.col("sold_on").isNull()) & (F.datediff(F.current_date(), F.col("ad_placed_on")) > 60), "AGING")
-             .otherwise("OK")
+            when((col("sold_on").isNull()) & (datediff(current_date(), col("ad_placed_on")) > 90), "CRITICAL")
+            .when((col("sold_on").isNull()) & (datediff(current_date(), col("ad_placed_on")) > 60), "AGING")
+            .otherwise("OK")
+        )
+        .select(
+            "sales_id", "ad_placed_on", "sold_on", "is_sold",
+            "selling_price", "region", "state", "city",
+            "seller_type", "owner", "car_id",
+            "days_on_lot", "aging_flag",
+            "_source_file", "_ingested_at"
         )
     )
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Silver Cars
+# MAGIC ---
+# MAGIC ## 5. Silver Cars
 
 # COMMAND ----------
 
 @dlt.table(
-    name="silver_cars_clean",
-    comment="Cleaned vehicle data with standardized values"
+    name="silver_cars",
+    comment="Cleaned vehicle catalogue. Numeric values extracted from unit strings.",
+    table_properties={"quality": "silver"}
 )
-@dlt.expect("car_id_not_null", "car_id IS NOT NULL")
-@dlt.expect("km_not_negative", "km_driven >= 0")
-def silver_cars_clean():
+@dlt.expect_or_drop("valid_car_id", "car_id IS NOT NULL")
+@dlt.expect("valid_km_driven", "km_driven >= 0")
+def silver_cars():
     return (
-        dlt.read("bronze_cars")
-        .withColumn("km_driven", F.col("km_driven").cast("integer"))
-        .withColumn("seats", F.col("seats").cast("integer"))
-        .withColumn("fuel", F.initcap(F.trim(F.col("fuel"))))
-        .withColumn("transmission", F.initcap(F.trim(F.col("transmission"))))
-        .withColumn("max_power",
-            F.regexp_extract(F.col("max_power"), r"([\d.]+)", 1).cast("double")
+        spark.readStream.table("`databricks-hackathon-insurance`.bronze.bronze_cars")
+        .withColumn("car_id", col("car_id").cast(IntegerType()))
+        .withColumn("name", trim(col("name")))
+        .withColumn("km_driven", col("km_driven").cast(IntegerType()))
+        .withColumn("fuel", initcap(trim(col("fuel"))))
+        .withColumn("transmission", initcap(trim(col("transmission"))))
+        .withColumn("mileage_kmpl",
+            regexp_extract(col("mileage"), r"([\d.]+)", 1).cast(DoubleType())
         )
-        .withColumn("torque_value",
-            F.regexp_extract(F.col("torque"), r"([\d.]+)", 1).cast("double")
+        .withColumn("engine_cc",
+            regexp_extract(col("engine"), r"(\d+)", 1).cast(IntegerType())
+        )
+        .withColumn("max_power_bhp",
+            regexp_extract(col("max_power"), r"([\d.]+)", 1).cast(DoubleType())
+        )
+        .withColumn("torque", col("torque"))
+        .withColumn("seats", col("seats").cast(IntegerType()))
+        .withColumn("model", trim(col("model")))
+        .select(
+            "car_id", "name", "km_driven", "fuel", "transmission",
+            "mileage_kmpl", "engine_cc", "max_power_bhp", "torque",
+            "seats", "model",
+            "_source_file", "_ingested_at"
         )
     )
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## DLT Pipeline Setup Instructions
-# MAGIC
-# MAGIC To run this notebook as a DLT Pipeline:
-# MAGIC
-# MAGIC 1. Go to **Workflows** > **Delta Live Tables** > **Create Pipeline**
-# MAGIC 2. Settings:
-# MAGIC    - Pipeline name: `primeins-silver-pipeline`
-# MAGIC    - Source: this notebook
-# MAGIC    - Target schema: ``databricks-hackathon-insurance`.silver`
-# MAGIC    - Catalog: `primeins`
-# MAGIC    - Pipeline mode: `Triggered` (for batch) or `Continuous` (for streaming)
-# MAGIC 3. Click **Start**
-# MAGIC 4. Monitor the pipeline graph - you'll see:
-# MAGIC    - Each table as a node
-# MAGIC    - Data quality metrics on each node
-# MAGIC    - Pass/fail rates for expectations
-# MAGIC
-# MAGIC The pipeline graph itself is a great screenshot for submission -
-# MAGIC it visually shows the data flow with quality metrics.

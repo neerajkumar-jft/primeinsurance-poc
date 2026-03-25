@@ -32,6 +32,8 @@ volume_path = "/Volumes/databricks-hackathon-insurance/bronze/workshop_data"
 # MAGIC
 # MAGIC Each regional system uses different ID formats.
 # MAGIC Auto Loader with mergeSchema handles columns that differ across files.
+# MAGIC
+# MAGIC Note: _metadata.file_path is used instead of input_file_name() — required in Unity Catalog.
 
 # COMMAND ----------
 
@@ -41,7 +43,7 @@ volume_path = "/Volumes/databricks-hackathon-insurance/bronze/workshop_data"
     table_properties={"quality": "bronze"}
 )
 def bronze_customers():
-    return (
+    regional = (
         spark.readStream
             .format("cloudFiles")
             .option("cloudFiles.format", "csv")
@@ -50,18 +52,21 @@ def bronze_customers():
             .option("header", "true")
             .option("mergeSchema", "true")
             .load(f"{volume_path}/Insurance */customers_*.csv")
-            .union(
-                spark.readStream
-                    .format("cloudFiles")
-                    .option("cloudFiles.format", "csv")
-                    .option("cloudFiles.inferColumnTypes", "true")
-                    .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
-                    .option("header", "true")
-                    .load(f"{volume_path}/customers_*.csv")
-            )
-            .withColumn("_source_file", F.input_file_name())
+            .withColumn("_source_file", F.col("_metadata.file_path"))
             .withColumn("_ingested_at", F.current_timestamp())
     )
+    root = (
+        spark.readStream
+            .format("cloudFiles")
+            .option("cloudFiles.format", "csv")
+            .option("cloudFiles.inferColumnTypes", "true")
+            .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+            .option("header", "true")
+            .load(f"{volume_path}/customers_*.csv")
+            .withColumn("_source_file", F.col("_metadata.file_path"))
+            .withColumn("_ingested_at", F.current_timestamp())
+    )
+    return regional.unionByName(root, allowMissingColumns=True)
 
 # COMMAND ----------
 
@@ -78,7 +83,6 @@ def bronze_customers():
     table_properties={"quality": "bronze"}
 )
 def bronze_claims():
-    # claims from Insurance 6 folder
     claims_regional = (
         spark.readStream
             .format("cloudFiles")
@@ -87,9 +91,9 @@ def bronze_claims():
             .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
             .option("multiLine", "true")
             .load(f"{volume_path}/Insurance 6/claims_*.json")
+            .withColumn("_source_file", F.col("_metadata.file_path"))
+            .withColumn("_ingested_at", F.current_timestamp())
     )
-
-    # claims from root level
     claims_root = (
         spark.readStream
             .format("cloudFiles")
@@ -98,18 +102,17 @@ def bronze_claims():
             .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
             .option("multiLine", "true")
             .load(f"{volume_path}/claims_*.json")
+            .withColumn("_source_file", F.col("_metadata.file_path"))
+            .withColumn("_ingested_at", F.current_timestamp())
     )
-
-    return (
-        claims_regional.unionByName(claims_root, allowMissingColumns=True)
-        .withColumn("_source_file", F.input_file_name())
-        .withColumn("_ingested_at", F.current_timestamp())
-    )
+    return claims_regional.unionByName(claims_root, allowMissingColumns=True)
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Policy
+# MAGIC
+# MAGIC Single file — Auto Loader watches the parent directory and filters by filename.
 
 # COMMAND ----------
 
@@ -125,8 +128,9 @@ def bronze_policy():
             .option("cloudFiles.format", "csv")
             .option("cloudFiles.inferColumnTypes", "true")
             .option("header", "true")
-            .load(f"{volume_path}/Insurance 5/policy.csv")
-            .withColumn("_source_file", F.input_file_name())
+            .option("pathGlobFilter", "policy*.csv")
+            .load(f"{volume_path}/Insurance 5/")
+            .withColumn("_source_file", F.col("_metadata.file_path"))
             .withColumn("_ingested_at", F.current_timestamp())
     )
 
@@ -155,7 +159,7 @@ def bronze_sales():
             .option("header", "true")
             .option("mergeSchema", "true")
             .load(f"{volume_path}/Insurance */[Ss]ales_*.csv")
-            .withColumn("_source_file", F.input_file_name())
+            .withColumn("_source_file", F.col("_metadata.file_path"))
             .withColumn("_ingested_at", F.current_timestamp())
     )
 
@@ -163,6 +167,8 @@ def bronze_sales():
 
 # MAGIC %md
 # MAGIC ## Cars
+# MAGIC
+# MAGIC Single file — Auto Loader watches the parent directory and filters by filename.
 
 # COMMAND ----------
 
@@ -178,8 +184,9 @@ def bronze_cars():
             .option("cloudFiles.format", "csv")
             .option("cloudFiles.inferColumnTypes", "true")
             .option("header", "true")
-            .load(f"{volume_path}/Insurance 4/cars.csv")
-            .withColumn("_source_file", F.input_file_name())
+            .option("pathGlobFilter", "cars*.csv")
+            .load(f"{volume_path}/Insurance 4/")
+            .withColumn("_source_file", F.col("_metadata.file_path"))
             .withColumn("_ingested_at", F.current_timestamp())
     )
 

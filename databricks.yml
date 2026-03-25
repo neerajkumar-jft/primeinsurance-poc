@@ -1,0 +1,69 @@
+bundle:
+  name: primeinsurance
+
+sync:
+  include:
+    - notebooks/**
+
+variables:
+  catalog:
+    default: databricks-hackathon-insurance
+
+targets:
+  dev:
+    mode: development
+
+resources:
+  pipelines:
+    bronze_pipeline:
+      name: PrimeInsurance - Bronze DLT
+      edition: ADVANCED
+      continuous: false
+      serverless: true
+      catalog: ${var.catalog}
+      target: bronze
+      libraries:
+        - notebook:
+            path: ./notebooks/01_bronze_ingestion_dlt.py
+
+    silver_pipeline:
+      name: PrimeInsurance - Silver DLT
+      edition: ADVANCED
+      continuous: false
+      serverless: true
+      catalog: ${var.catalog}
+      target: silver
+      libraries:
+        - notebook:
+            path: ./notebooks/02_silver_dlt_pipeline.py
+
+    gold_pipeline:
+      name: PrimeInsurance - Gold DLT
+      edition: ADVANCED
+      continuous: false
+      serverless: true
+      catalog: ${var.catalog}
+      target: gold
+      libraries:
+        - notebook:
+            path: ./notebooks/03_gold_dlt_pipeline.py
+
+  jobs:
+    full_pipeline:
+      name: PrimeInsurance - Full Pipeline
+      tasks:
+        - task_key: bronze
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.bronze_pipeline.id}
+
+        - task_key: silver
+          depends_on:
+            - task_key: bronze
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_pipeline.id}
+
+        - task_key: gold
+          depends_on:
+            - task_key: silver
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.gold_pipeline.id}
