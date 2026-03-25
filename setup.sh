@@ -24,7 +24,12 @@ echo "Discovering workspace details..."
 
 AUTH_ENV=$(databricks auth env 2>/dev/null)
 DATABRICKS_HOST=$(echo "$AUTH_ENV" | python3 -c "import json,sys; print(json.load(sys.stdin)['env']['DATABRICKS_HOST'])" 2>/dev/null)
-DATABRICKS_TOKEN=$(echo "$AUTH_ENV" | python3 -c "import json,sys; print(json.load(sys.stdin)['env']['DATABRICKS_TOKEN'])" 2>/dev/null)
+DATABRICKS_TOKEN=$(echo "$AUTH_ENV" | python3 -c "import json,sys; print(json.load(sys.stdin)['env'].get('DATABRICKS_TOKEN',''))" 2>/dev/null)
+
+# If no token in env, fetch one via `databricks auth token`
+if [ -z "$DATABRICKS_TOKEN" ]; then
+    DATABRICKS_TOKEN=$(databricks auth token --host "$DATABRICKS_HOST" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
+fi
 
 if [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
     echo "ERROR: Not authenticated. Run 'databricks auth login' first."

@@ -2,394 +2,504 @@
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC # UC3: Policy Intelligence Assistant (RAG)
-# MAGIC
-# MAGIC **Problem**: Claims adjusters spend 10-15 min per claim looking up policy details
-# MAGIC (deductibles, coverage, umbrella limits). With 3,000 claims/year that's 500-750
-# MAGIC hours wasted on lookups that should take seconds.
-# MAGIC
-# MAGIC **Solution**: RAG system over policy data. Adjusters ask questions in plain English,
-# MAGIC system retrieves relevant policies and generates accurate answers with citations.
-# MAGIC
-# MAGIC **Input**: ``databricks-hackathon-insurance`.gold.dim_policy`
-# MAGIC **Output**: ``databricks-hackathon-insurance`.gold.rag_query_history`
-
-# COMMAND ----------
-
-# MAGIC %pip install sentence-transformers faiss-cpu --quiet
-
-# COMMAND ----------
-
+# ============================================================                                                                                                                              
+# RAG POLICY ASSISTANT — UC3 Part A
+# PrimeInsurance Data Intelligence Platform                                                                                                                                                 
+# ============================================================                                                                                                                              
+# Converts dim_policy rows into natural language documents,                                                                                                                                 
+# embeds them with sentence-transformers (local, no API),                                                                                                                                   
+# builds a FAISS vector index, and answers natural language                                                                                                                                 
+# questions with cited policy numbers.                                                                                                                                                      
+#                                                                                                                                                                                           
+# Architecture: 
+#   dim_policy → Text Documents → Embeddings → FAISS Index                                                                                                                                  
+#   User Query → Embed → FAISS Search → Top-K Chunks → LLM → Answer                                                                                                                         
+#                                                                                                                                                                                           
+# Key: RAG is for semantic questions ("what does this policy cover?")                                                                                                                       
+#      Genie is for analytical questions ("how many policies in Ohio?")                                                                                                                     
+# ============================================================                                                                                                                              
+                                                                                                                                                                                            
+%pip install openai mlflow tenacity pydantic sentence-transformers faiss-cpu --quiet                                                                                                                
 dbutils.library.restartPython()
 
 # COMMAND ----------
 
-from pyspark.sql import functions as F
+# ============================================================
+# CONFIGURATION & SETUP
+# ============================================================
+
+import mlflow
 import json
+import re
+import numpy as np
+import re
 from datetime import datetime
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Load Policy Data
-
-# COMMAND ----------
-
-dim_policy = spark.table("`databricks-hackathon-insurance`.gold.dim_policy").toPandas()
-print(f"total policies: {len(dim_policy)}")
-dim_policy.head()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 1: Convert Structured Data to Text Documents
-# MAGIC
-# MAGIC RAG needs text, but `dim_policy` is a structured table.
-# MAGIC We convert each policy row into a readable text document.
-# MAGIC
-# MAGIC This is a key design decision - we tried a few approaches:
-# MAGIC - Just concatenating column values: too terse, lost context
-# MAGIC - Full prose paragraphs: too verbose, wasted tokens
-# MAGIC - Structured template (what we're using): good balance
-
-# COMMAND ----------
-
-def policy_to_text(row):
-    """convert a policy row into a searchable text document"""
-    return (
-        f"Policy Number: {row['policy_number']}. "
-        f"This policy is bound in state {row.get('policy_state', 'N/A')} "
-        f"with a bind date of {row.get('policy_bind_date', 'N/A')}. "
-        f"Coverage split limit (CSL): {row.get('policy_csl', 'N/A')}. "
-        f"Annual premium: ${row.get('policy_annual_premium', 0):.2f}. "
-        f"Deductible: ${row.get('policy_deductible', 0)}. "
-        f"Umbrella limit: ${row.get('umbrella_limit', 0)}. "
-        f"Linked to car ID: {row.get('car_id', 'N/A')}. "
-        f"Linked to customer ID: {row.get('customer_id', 'N/A')}."
-    )
-
-# convert all policies to text docs
-documents = []
-for idx, row in dim_policy.iterrows():
-    doc_text = policy_to_text(row)
-    documents.append({
-        "doc_id": idx,
-        "policy_number": row["policy_number"],
-        "text": doc_text,
-    })
-
-print(f"created {len(documents)} text documents")
-print(f"\nsample document:")
-print(documents[0]["text"])
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 2: Chunking
-# MAGIC
-# MAGIC For a structured table like this, each row is already a natural "chunk".
-# MAGIC But for larger documents you'd need to split. We experimented:
-# MAGIC
-# MAGIC | Chunk Size | Result |
-# MAGIC |-----------|--------|
-# MAGIC | 1 row per chunk | Works well - each policy is self-contained |
-# MAGIC | 5 rows per chunk | Retrieves too much noise for specific queries |
-# MAGIC | Column-level | Too fragmented, lost context |
-# MAGIC
-# MAGIC Going with 1 row per chunk since each policy document is ~100 tokens.
-
-# COMMAND ----------
-
-# our chunks are just the individual policy documents
-# for a real document corpus, we'd do something like:
-#
-# def chunk_text(text, chunk_size=500, overlap=50):
-#     chunks = []
-#     for i in range(0, len(text), chunk_size - overlap):
-#         chunks.append(text[i:i + chunk_size])
-#     return chunks
-
-chunks = documents  # each policy is its own chunk
-print(f"total chunks: {len(chunks)}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 3: Generate Embeddings & Build Vector Index
-# MAGIC
-# MAGIC Using a simple approach with sentence embeddings.
-# MAGIC For production you'd use Databricks Vector Search, but FAISS works
-# MAGIC for this POC and has no external dependencies.
-
-# COMMAND ----------
-
-# we'll use the databricks foundation model for embeddings too
 from openai import OpenAI
+from tenacity import retry, stop_after_attempt, wait_random_exponential
+from pydantic import BaseModel, Field, field_validator
+from sentence_transformers import SentenceTransformer
+import faiss
 
+# ── MLflow Tracing ──
+mlflow.openai.autolog()
+
+# ── LLM Connection ──
 DATABRICKS_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-DATABRICKS_URL = spark.conf.get("spark.databricks.workspaceUrl")
+WORKSPACE_URL = spark.conf.get("spark.databricks.workspaceUrl")
 
 client = OpenAI(
     api_key=DATABRICKS_TOKEN,
-    base_url=f"https://{DATABRICKS_URL}/serving-endpoints"
+    base_url=f"https://{WORKSPACE_URL}/serving-endpoints"
 )
 
-MODEL = "databricks-meta-llama-3-1-70b-instruct"
+# ── Constants ──
+MODEL_NAME = "databricks-gpt-oss-20b"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384
+MAX_TOKENS = 1500
+SOURCE_TABLE = "`databricks-hackathon-insurance`.gold.dim_policy"
+OUTPUT_TABLE = "`databricks-hackathon-insurance`.gold.rag_query_history"
+PROMPT_VERSION = "v1"
+TOP_K = 5  # Number of chunks to retrieve
 
-# COMMAND ----------
-
-# Embedding approach: we tried two options
-#
-# Option A: TF-IDF (simpler, no extra dependencies)
-#   - Fast, works offline, good for keyword-heavy queries
-#   - Weak on semantic similarity ("coverage" vs "protection")
-#
-# Option B: sentence-transformers with all-MiniLM-L6-v2 (what we're using)
-#   - Captures semantic meaning, not just keyword overlap
-#   - Better for natural language questions
-#   - Small model, runs fine on driver node
-#
-# We went with Option B for better retrieval quality.
-
-# install if not available
-# %pip install sentence-transformers faiss-cpu
-
-try:
-    from sentence_transformers import SentenceTransformer
-    import faiss
-    import numpy as np
-
-    # load a lightweight embedding model
-    embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-    # encode all policy documents
-    texts = [c["text"] for c in chunks]
-    doc_embeddings = embed_model.encode(texts, show_progress_bar=True)
-
-    # build FAISS index for fast similarity search
-    dimension = doc_embeddings.shape[1]
-    index = faiss.IndexFlatIP(dimension)  # inner product (cosine sim on normalized vectors)
-
-    # normalize for cosine similarity
-    faiss.normalize_L2(doc_embeddings)
-    index.add(doc_embeddings)
-
-    USE_FAISS = True
-    print(f"built FAISS index: {index.ntotal} vectors, {dimension} dimensions")
-
-except ImportError:
-    # fallback to TF-IDF if sentence-transformers not available
-    print("sentence-transformers not available, falling back to TF-IDF")
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity as cos_sim
-
-    texts = [c["text"] for c in chunks]
-    vectorizer = TfidfVectorizer(max_features=5000, stop_words='english')
-    doc_vectors = vectorizer.fit_transform(texts)
-    USE_FAISS = False
-    print(f"built TF-IDF index: {doc_vectors.shape[0]} docs x {doc_vectors.shape[1]} features")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 4: Retrieval Function
-
-# COMMAND ----------
-
-def retrieve_relevant_policies(query, top_k=5):
-    """
-    given a natural language query, find the most relevant policy documents.
-    returns the top-k most similar chunks with their scores.
-    """
-    if USE_FAISS:
-        # semantic search using sentence embeddings + FAISS
-        query_embedding = embed_model.encode([query])
-        faiss.normalize_L2(query_embedding)
-        scores, indices = index.search(query_embedding, top_k)
-
-        results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx >= 0 and score > 0.0:
-                results.append({
-                    "doc_id": chunks[idx]["doc_id"],
-                    "policy_number": chunks[idx]["policy_number"],
-                    "text": chunks[idx]["text"],
-                    "similarity_score": float(score),
-                })
-        return results
+# ── Response parser ──
+def extract_text(raw_response):
+    if isinstance(raw_response, list):
+        parsed = raw_response
+    elif isinstance(raw_response, str):
+        try:
+            parsed = json.loads(raw_response)
+        except json.JSONDecodeError:
+            return raw_response
     else:
-        # fallback: TF-IDF keyword search
-        query_vector = vectorizer.transform([query])
-        similarities = cos_sim(query_vector, doc_vectors).flatten()
-        top_indices = similarities.argsort()[-top_k:][::-1]
+        return str(raw_response)
+    for block in parsed:
+        if block.get("type") == "text":
+            return block["text"]
+    return str(raw_response)
 
-        results = []
-        for idx in top_indices:
-            score = similarities[idx]
-            if score > 0.0:
-                results.append({
-                    "doc_id": chunks[idx]["doc_id"],
-                    "policy_number": chunks[idx]["policy_number"],
-                    "text": chunks[idx]["text"],
-                    "similarity_score": float(score),
-                })
-        return results
+# ── LLM call with retry ──
+@retry(
+    wait=wait_random_exponential(min=2, max=60),
+    stop=stop_after_attempt(5),
+)
+def call_llm(messages, max_tokens=MAX_TOKENS):
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=messages,
+        max_tokens=max_tokens,
+    )
+    raw = response.choices[0].message.content
+    text = extract_text(raw)
+    first_brace = text.find('{')
+    last_brace = text.rfind('}')
+    if first_brace != -1 and last_brace > first_brace:
+        return json.loads(text[first_brace:last_brace + 1])
+    return json.loads(text)
 
-# COMMAND ----------
+# ── Output guardrails ──
+def apply_guardrails(text):
+    """Redacts PII patterns from LLM output."""
+    text = re.sub(r'\b[\w.-]+@[\w.-]+\.\w+\b', '[REDACTED_EMAIL]', text)
+    text = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[REDACTED_PHONE]', text)
+    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]', text)
+    return text
 
-# test retrieval
-test_query = "which policies have umbrella coverage above 1000000"
-test_results = retrieve_relevant_policies(test_query)
-
-print(f"query: {test_query}")
-print(f"found {len(test_results)} relevant policies:\n")
-for r in test_results[:3]:
-    print(f"  [{r['similarity_score']:.3f}] {r['policy_number']}: {r['text'][:100]}...")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 5: RAG Pipeline - Retrieve + Generate
-
-# COMMAND ----------
-
-def ask_policy_question(question, top_k=5):
-    """
-    end-to-end RAG: retrieve relevant policies, send to LLM with context,
-    generate answer with source citations.
-    """
-    # retrieve
-    retrieved = retrieve_relevant_policies(question, top_k=top_k)
-
-    if not retrieved or max(r["similarity_score"] for r in retrieved) < 0.05:
-        # low confidence - be honest about it
-        return {
-            "answer": "I don't have enough relevant information to answer this question confidently. "
-                      "The policy records I found don't directly address your query. "
-                      "Please try rephrasing or check with the policy team directly.",
-            "confidence": "LOW",
-            "sources": [],
-            "retrieved_count": len(retrieved),
-            "max_similarity": max(r["similarity_score"] for r in retrieved) if retrieved else 0,
-        }
-
-    # build context from retrieved docs
-    context_parts = []
-    source_policies = []
-    for r in retrieved:
-        context_parts.append(r["text"])
-        source_policies.append(r["policy_number"])
-
-    context = "\n\n".join(context_parts)
-
-    prompt = f"""You are a policy information assistant at PrimeInsurance.
-Answer the question using ONLY the policy data provided below.
-If the answer isn't in the data, say "I cannot determine this from the available policy records."
-
-POLICY DATA:
-{context}
-
-QUESTION: {question}
-
-Provide a clear, specific answer. Reference policy numbers when citing data.
-Keep the answer concise and factual."""
-
-    try:
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.2,
-        )
-        answer = response.choices[0].message.content.strip()
-    except Exception as e:
-        answer = f"Error generating response: {str(e)}"
-
-    # determine confidence based on retrieval quality
-    max_sim = max(r["similarity_score"] for r in retrieved)
-    confidence = "HIGH" if max_sim > 0.3 else "MEDIUM" if max_sim > 0.1 else "LOW"
-
-    return {
-        "answer": answer,
-        "confidence": confidence,
-        "sources": source_policies,
-        "retrieved_count": len(retrieved),
-        "max_similarity": max_sim,
-    }
+print(f"LLM: {MODEL_NAME}")
+print(f"Embedding: {EMBEDDING_MODEL} ({EMBEDDING_DIM}d)")
+print(f"Source: {SOURCE_TABLE}")
+print(f"Output: {OUTPUT_TABLE}")
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Test with Sample Questions
+# ============================================================
+# PYDANTIC OUTPUT MODEL — RAG Answer
+# ============================================================
+
+class RAGAnswer(BaseModel):
+    """Structured answer from the RAG policy assistant."""
+
+    answer: str = Field(min_length=20, description="Direct answer to the user's question")
+    cited_policies: str = Field(min_length=2, description="Comma-separated list of policy numbers used to form the answer")
+    confidence_explanation: str = Field(min_length=10, description="Why you are confident or not confident in this answer")
+
+    @field_validator('*', mode='before')
+    @classmethod
+    def clean_input(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            if v.lower() in ('n/a', 'none', 'null', '', '-'):
+                return "[Not provided]"
+        return v
+
+print("✅ Pydantic model ready")
 
 # COMMAND ----------
 
-# these are the kinds of questions adjusters and the compliance team would ask
-test_questions = [
-    "Which policies have umbrella coverage above $1,000,000?",
-    "What is the average annual premium for policies with 250/500 coverage?",
-    "Which policies have the highest deductible?",
-    "Show me policies linked to cars from the Central region",
-    "What coverage split limits are available?",
-]
+# ============================================================
+# LOAD POLICIES & CONVERT TO NATURAL LANGUAGE DOCUMENTS
+# ============================================================
+# Each policy row becomes a rich English paragraph.
+# This is critical for embedding quality — embeddings understand
+# "the deductible is $500" far better than "deductible: 500".
+#
+# Key decisions:
+#   - One policy = one chunk (no splitting, no overlap)
+#   - Policy number embedded in text for citation retrieval
+#   - CSL format explained in plain English
+#   - Umbrella limit only mentioned if > 0
+# ============================================================
 
-query_results = []
+policies_df = spark.sql(f"SELECT * FROM {SOURCE_TABLE}").toPandas()
+print(f"✅ Loaded {len(policies_df)} policies from {SOURCE_TABLE}")
 
-for q in test_questions:
-    print(f"\nQ: {q}")
-    result = ask_policy_question(q)
-    print(f"A: {result['answer'][:200]}...")
-    print(f"   Confidence: {result['confidence']} | Sources: {result['sources'][:3]} | Similarity: {result['max_similarity']:.3f}")
+# CSL decoder — "100/300" means $100K per person / $300K per accident
+def decode_csl(csl):
+    """Convert CSL code to plain English."""
+    parts = csl.split("/")
+    if len(parts) == 2:
+        return f"${parts[0]}K per person and ${parts[1]}K per accident"
+    return csl
 
-    query_results.append({
-        "question": q,
-        "answer": result["answer"],
-        "confidence": result["confidence"],
-        "source_policies": json.dumps(result["sources"]),
-        "retrieved_count": result["retrieved_count"],
-        "max_similarity_score": result["max_similarity"],
-        "model_name": MODEL,
-        "timestamp": datetime.now().isoformat(),
+def policy_to_document(row) -> str:
+    """Convert a structured policy row into a natural language document."""
+    doc = (
+        f"Policy {int(row['policy_number'])} is an auto insurance policy "
+        f"bound on {row['policy_bind_date']} in the state of {row['policy_state']}. "
+        f"The policy has a combined single limit (CSL) of {row['policy_csl']}, "
+        f"which provides bodily injury coverage of {decode_csl(row['policy_csl'])}. "
+        f"The deductible is ${row['policy_deductible']:,} "
+        f"and the annual premium is ${row['policy_annual_premium']:,.2f}. "
+        f"This policy covers car ID {row['car_id']} "
+        f"and belongs to customer ID {row['customer_id']}."
+    )
+
+    if row['umbrella_limit'] and row['umbrella_limit'] > 0:
+        doc += f" The policy includes umbrella coverage with a limit of ${row['umbrella_limit']:,}."
+    else:
+        doc += " This policy does not include umbrella coverage."
+
+    # Categorize by premium tier
+    premium = row['policy_annual_premium']
+    if premium >= 2000:
+        doc += " This is a Premium tier policy with high coverage."
+    elif premium >= 1000:
+        doc += " This is a Standard tier policy with moderate coverage."
+    else:
+        doc += " This is a Basic tier policy with minimum coverage."
+
+    return doc
+
+# Convert all policies
+documents = []
+metadata = []
+
+for _, row in policies_df.iterrows():
+    doc_text = policy_to_document(row)
+    documents.append(doc_text)
+    metadata.append({
+        "text": doc_text,
+        "policy_number": str(int(row["policy_number"])),
+        "policy_state": row["policy_state"],
+        "policy_csl": row["policy_csl"],
+        "deductible": int(row["policy_deductible"]),
+        "premium": float(row["policy_annual_premium"]),
+        "umbrella_limit": int(row["umbrella_limit"]) if row["umbrella_limit"] else 0,
+        "customer_id": row["customer_id"],
+        "car_id": row["car_id"],
     })
 
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Write Query History to Gold
+print(f"✅ Converted {len(documents)} policies to documents")
+print(f"\n📄 Example document:\n{documents[0]}")
 
 # COMMAND ----------
 
-rag_history_df = spark.createDataFrame(query_results)
+# ============================================================
+# EMBED DOCUMENTS & BUILD FAISS INDEX
+# ============================================================
+# Model: all-MiniLM-L6-v2
+#   - 384-dimensional embeddings
+#   - 256 token max input
+#   - Trained on cosine similarity
+#
+# Index: IndexFlatIP (inner product on normalized vectors = cosine similarity)
+#   - Exact search (no approximation needed for ~15 policies)
+#   - <1ms query time
+#   - Wrapped in IndexIDMap for custom IDs
+# ============================================================
 
-(rag_history_df.write
-    .format("delta")
-    .mode("overwrite")
-    .option("overwriteSchema", "true")
-    .saveAsTable("`databricks-hackathon-insurance`.gold.rag_query_history"))
+# ── Load embedding model ──
+embed_model = SentenceTransformer(EMBEDDING_MODEL)
+print(f"✅ Loaded {EMBEDDING_MODEL}")
 
-print(f"gold.rag_query_history: {rag_history_df.count()} rows")
+# ── Embed all documents ──
+embeddings = embed_model.encode(
+    documents,
+    normalize_embeddings=True,  # Required for cosine similarity via inner product
+    show_progress_bar=True,
+    batch_size=64
+)
+embeddings = embeddings.astype(np.float32)
+print(f"✅ Embedded {len(embeddings)} documents → shape: {embeddings.shape}")
+
+# ── Build FAISS index ──
+# IndexFlatIP on normalized vectors = cosine similarity
+# Scores will be in [0, 1] range — easy to interpret
+base_index = faiss.IndexFlatIP(EMBEDDING_DIM)
+index = faiss.IndexIDMap(base_index)
+
+ids = np.arange(len(embeddings)).astype(np.int64)
+index.add_with_ids(embeddings, ids)
+
+print(f"✅ FAISS index built — {index.ntotal} vectors, {EMBEDDING_DIM}d")
 
 # COMMAND ----------
 
-display(spark.table("`databricks-hackathon-insurance`.gold.rag_query_history"))
+# ============================================================
+# RAG QUERY ENGINE
+# ============================================================
+
+def retrieve(query: str, top_k: int = TOP_K) -> list:
+    """Retrieve top-k relevant policy chunks using FAISS."""
+    query_embedding = embed_model.encode([query], normalize_embeddings=True).astype(np.float32)
+    scores, indices = index.search(query_embedding, top_k)
+
+    results = []
+    for score, idx in zip(scores[0], indices[0]):
+        if idx == -1:
+            continue
+        results.append({
+            **metadata[idx],
+            "similarity_score": round(float(score), 4),
+        })
+    return results
+
+
+def compute_confidence(results: list) -> dict:
+    """Compute confidence level based on retrieval quality."""
+    if not results:
+        return {"level": "none", "score": 0.0}
+
+    top_score = results[0]["similarity_score"]
+    top3_avg = np.mean([r["similarity_score"] for r in results[:3]])
+    score_gap = (results[0]["similarity_score"] - results[1]["similarity_score"]) if len(results) > 1 else 0.0
+
+    confidence_score = round((0.5 * top_score) + (0.2 * score_gap) + (0.3 * top3_avg), 4)
+
+    if top_score >= 0.65:
+        level = "HIGH"
+    elif top_score >= 0.35:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    return {"level": level, "score": confidence_score, "top_similarity": top_score}
+
+
+SYSTEM_PROMPT = """You are a policy intelligence assistant at PrimeInsurance. Claims adjusters ask you questions about insurance policies. You answer based ONLY on the policy documents provided below.
+
+You must always respond in json format with exactly these 3 keys:
+{
+    "answer": "Direct answer to the question. Reference specific policy numbers, amounts, and coverage details. If multiple policies match, compare them.",
+    "cited_policies": "Comma-separated list of policy numbers you referenced (e.g., '100804, 101421')",
+    "confidence_explanation": "Explain how confident you are and why. Reference the relevance of the retrieved policies."
+}
+
+<example>
+Question: Which policies have umbrella coverage above $2,000,000?
+Retrieved: Policy 106234 (umbrella $8M), Policy 111234 (umbrella $10M), Policy 107890 (umbrella $4M)
+
+Response:
+{{
+    "answer": "Three policies have umbrella coverage above $2,000,000: Policy 111234 has the highest at $10,000,000, followed by Policy 106234 at $8,000,000 and Policy 107890 at $4,000,000. These are all Premium tier policies with annual premiums above $1,800.",
+    "cited_policies": "111234, 106234, 107890",
+    "confidence_explanation": "High confidence — all three policies explicitly list their umbrella limits in the retrieved documents, and the question directly matches the data available."
+}}
+</example>
+
+<constraints>
+- ONLY use information from the provided policy documents
+- ALWAYS cite specific policy numbers
+- If no policy matches the question, say so clearly
+- Do NOT invent policy details not in the documents
+</constraints>"""
+
+
+def ask(question: str) -> dict:
+    """Full RAG pipeline: retrieve → build context → call LLM → return structured answer."""
+
+    # Step 1: Retrieve relevant policies
+    results = retrieve(question, top_k=TOP_K)
+    confidence = compute_confidence(results)
+
+    # Step 2: Build context from top results
+    context_parts = []
+    for i, r in enumerate(results[:3]):
+        context_parts.append(
+            f"[Policy {r['policy_number']}] (relevance: {r['similarity_score']:.1%})\n{r['text']}"
+        )
+    context = "\n\n".join(context_parts)
+
+    # Step 3: Call LLM with context
+    user_message = f"""Retrieved policy documents:
+
+{context}
+
+Question: {question}"""
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_message},
+    ]
+
+    data = call_llm(messages)
+    answer = RAGAnswer(**data)
+
+    return {
+        "question": question,
+        "answer": apply_guardrails(answer.answer),
+        "cited_policies": answer.cited_policies,
+        "confidence_level": confidence["level"],
+        "confidence_score": confidence["score"],
+        "confidence_explanation": answer.confidence_explanation,
+        "top_similarity": confidence["top_similarity"],
+        "num_chunks_retrieved": len(results),
+        "retrieved_policies": json.dumps([
+            {"policy_number": r["policy_number"], "similarity": r["similarity_score"]}
+            for r in results[:5]
+        ]),
+    }
+
+
+print("✅ RAG query engine ready")
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## RAG Design Decisions
-# MAGIC
-# MAGIC **Chunk strategy**: 1 policy = 1 chunk (~100 tokens each).
-# MAGIC Structured data doesn't need splitting - each row is self-contained.
-# MAGIC If we had actual PDF policy documents, we'd use 500-token chunks with 50-token overlap.
-# MAGIC
-# MAGIC **Why convert structured data to text first**: TF-IDF and LLMs work on text.
-# MAGIC We could pass raw SQL results, but converting to natural language makes retrieval
-# MAGIC more flexible (handles synonyms, paraphrasing) and gives the LLM better context.
-# MAGIC
-# MAGIC **"I don't know" detection**: If max similarity < 0.05, we refuse to answer
-# MAGIC rather than hallucinate. Better to say "I'm not sure" than give a wrong answer
-# MAGIC about someone's insurance coverage.
-# MAGIC
-# MAGIC **Source attribution**: Every answer includes the policy numbers it drew from,
-# MAGIC so adjusters can verify and the system is auditable.
+# ============================================================
+# TEST QUERIES — 5 different query types
+# ============================================================
+# The hackathon requires at least 5 test questions covering:
+#   1. Specific policy lookup
+#   2. Comparative query
+#   3. Filter-based question
+#   4. Coverage/deductible question
+#   5. Umbrella coverage question
+# ============================================================
+
+test_questions = [
+    # Type 1: Specific policy lookup
+    "What are the details of policy 100804?",
+
+    # Type 2: Comparative query
+    "Which policy has the highest annual premium and what does it cover?",
+
+    # Type 3: Filter-based question
+    "Which policies are in the state of Illinois?",
+
+    # Type 4: Coverage/deductible question
+    "Which policies have a deductible of $500 or less?",
+
+    # Type 5: Umbrella coverage question
+    "Which policies include umbrella coverage and what are the limits?",
+]
+
+mlflow.set_experiment("/Users/abhinav.sarkar@jellyfishtechnologies.com/primeinsurance-hackathon/rag_policy")
+
+all_results = []
+
+with mlflow.start_run(run_name=f"rag_policy_{datetime.now().strftime('%Y%m%d_%H%M')}") as run:
+
+    mlflow.set_tags({
+        "model": MODEL_NAME,
+        "embedding_model": EMBEDDING_MODEL,
+        "pipeline": "rag_policy",
+        "prompt_version": PROMPT_VERSION,
+    })
+    mlflow.log_params({
+        "top_k": TOP_K,
+        "total_policies": len(documents),
+        "embedding_dim": EMBEDDING_DIM,
+        "num_test_questions": len(test_questions),
+    })
+
+    for i, question in enumerate(test_questions):
+        print(f"\n{'='*70}")
+        print(f"  Q{i+1}: {question}")
+        print(f"{'='*70}")
+
+        start = datetime.now()
+        result = ask(question)
+        duration_ms = int((datetime.now() - start).total_seconds() * 1000)
+
+        result["duration_ms"] = duration_ms
+        result["model_name"] = MODEL_NAME
+        result["embedding_model"] = EMBEDDING_MODEL
+        result["prompt_version"] = PROMPT_VERSION
+        result["generated_at"] = datetime.now().isoformat()
+
+        all_results.append(result)
+
+        print(f"\n  Answer: {result['answer'][:300]}")
+        print(f"\n  Cited Policies: {result['cited_policies']}")
+        print(f"  Confidence: {result['confidence_level']} ({result['confidence_score']:.1%})")
+        print(f"  Duration: {duration_ms}ms")
+
+    mlflow.log_metrics({
+        "avg_confidence": np.mean([r["confidence_score"] for r in all_results]),
+        "avg_duration_ms": np.mean([r["duration_ms"] for r in all_results]),
+        "high_confidence_count": sum(1 for r in all_results if r["confidence_level"] == "HIGH"),
+    })
+
+    print(f"\n\n{'='*70}")
+    print(f"  MLflow Run: {run.info.run_id}")
+    print(f"{'='*70}")
+
+# COMMAND ----------
+
+# ============================================================
+# SAVE QUERY HISTORY TO GOLD TABLE
+# ============================================================
+
+if all_results:
+    # Convert numpy types to native Python types
+    clean_results = []
+    for r in all_results:
+        clean_results.append({
+            k: float(v) if isinstance(v, (np.floating, np.float32, np.float64))
+            else int(v) if isinstance(v, (np.integer, np.int32, np.int64))
+            else v
+            for k, v in r.items()
+        })
+
+    results_df = spark.createDataFrame(clean_results)
+
+    table_exists = spark.catalog.tableExists(OUTPUT_TABLE)
+
+    if not table_exists:
+        results_df.write.mode("overwrite").saveAsTable(OUTPUT_TABLE)
+        print(f"✅ Created {OUTPUT_TABLE} with {len(clean_results)} rows")
+    else:
+        results_df.write.mode("append").saveAsTable(OUTPUT_TABLE)
+        print(f"✅ Appended {len(clean_results)} rows to {OUTPUT_TABLE}")
+
+    total = spark.sql(f"SELECT COUNT(*) as cnt FROM {OUTPUT_TABLE}").collect()[0]["cnt"]
+    print(f"📊 Total rows in {OUTPUT_TABLE}: {total}")
+
+# COMMAND ----------
+
+# ============================================================
+# VERIFY FINAL OUTPUT
+# ============================================================
+
+display(spark.sql(f"""
+    SELECT
+        question,
+        confidence_level,
+        confidence_score,
+        cited_policies,
+        duration_ms,
+        LEFT(answer, 150) as answer_preview
+    FROM {OUTPUT_TABLE}
+    ORDER BY generated_at DESC
+    LIMIT 10
+"""))

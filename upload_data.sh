@@ -14,7 +14,12 @@ set -e
 
 AUTH_ENV=$(databricks auth env 2>/dev/null)
 HOST=$(echo "$AUTH_ENV" | python3 -c "import json,sys; print(json.load(sys.stdin)['env']['DATABRICKS_HOST'])" 2>/dev/null)
-TOKEN=$(echo "$AUTH_ENV" | python3 -c "import json,sys; print(json.load(sys.stdin)['env']['DATABRICKS_TOKEN'])" 2>/dev/null)
+TOKEN=$(echo "$AUTH_ENV" | python3 -c "import json,sys; print(json.load(sys.stdin)['env'].get('DATABRICKS_TOKEN',''))" 2>/dev/null)
+
+# If no token in env, fetch one via `databricks auth token`
+if [ -z "$TOKEN" ]; then
+    TOKEN=$(databricks auth token --host "$HOST" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
+fi
 
 if [ -z "$HOST" ] || [ -z "$TOKEN" ]; then
     echo "ERROR: Not authenticated. Run 'databricks auth login' first."

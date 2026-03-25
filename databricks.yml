@@ -74,3 +74,31 @@ resources:
             - task_key: dq_issues
           pipeline_task:
             pipeline_id: ${resources.pipelines.gold_pipeline.id}
+
+        - task_key: uc1_dq_explanations
+          depends_on:
+            - task_key: dq_issues
+          notebook_task:
+            notebook_path: ./notebooks/04_uc1_dq_explanations.py
+            source: WORKSPACE
+
+        - task_key: uc2_anomaly_engine
+          depends_on:
+            - task_key: gold
+          notebook_task:
+            notebook_path: ./notebooks/04_uc2_anomaly_engine.py
+            source: WORKSPACE
+
+        - task_key: uc3_policy_rag
+          depends_on:
+            - task_key: gold
+          notebook_task:
+            notebook_path: ./notebooks/04_uc3_policy_rag.py
+            source: WORKSPACE
+
+        - task_key: uc4_executive_insights
+          depends_on:
+            - task_key: gold
+          notebook_task:
+            notebook_path: ./notebooks/04_uc4_executive_insights.py
+            source: WORKSPACE

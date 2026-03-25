@@ -2,399 +2,581 @@
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC # UC2: Claims Risk & Anomaly Engine
-# MAGIC
-# MAGIC **Problem**: Claims investigators manually review 3,000 claims looking for fraud patterns.
-# MAGIC No consistent scoring, no prioritized queue, no structured explanation of why a claim is suspicious.
-# MAGIC
-# MAGIC **Solution**: Statistical anomaly detection (5 weighted rules) + LLM-generated investigation briefs.
-# MAGIC
-# MAGIC **Input**: ``databricks-hackathon-insurance`.silver.claims`
-# MAGIC **Output**: ``databricks-hackathon-insurance`.gold.claim_anomaly_explanations`
+# ============================================================
+# CLAIMS ANOMALY DETECTION — UC2
+# PrimeInsurance Data Intelligence Platform
+# ============================================================
+# This notebook implements a statistical fraud-scoring system
+# for insurance claims. It uses PySpark for rule-based anomaly
+# detection and sends only flagged claims to an LLM for
+# narrative investigation briefs.
+#
+# Key principle: "The LLM is not a classifier; it is an explainer."
+# Statistics detect. LLM explains.
+# ============================================================
+
+%pip install openai mlflow tenacity pydantic --quiet
 
 # COMMAND ----------
 
-from pyspark.sql import functions as F
-from pyspark.sql import Window
-from pyspark.sql.types import *
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# ============================================================
+# CONFIGURATION & SETUP
+# ============================================================
+
+import mlflow
 import json
+import re
 from datetime import datetime
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Load Claims Data
-
-# COMMAND ----------
-
-claims = spark.table("`databricks-hackathon-insurance`.silver.claims")
-print(f"total claims: {claims.count()}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Statistical Analysis
-# MAGIC
-# MAGIC Before defining rules, let's understand the distributions.
-# MAGIC This justifies our threshold choices.
-
-# COMMAND ----------
-
-# amount distribution
-amount_stats = claims.select(
-    F.mean("total_claim_amount").alias("mean"),
-    F.stddev("total_claim_amount").alias("std"),
-    F.percentile_approx("total_claim_amount", 0.25).alias("p25"),
-    F.percentile_approx("total_claim_amount", 0.50).alias("p50"),
-    F.percentile_approx("total_claim_amount", 0.75).alias("p75"),
-    F.percentile_approx("total_claim_amount", 0.95).alias("p95"),
-    F.percentile_approx("total_claim_amount", 0.99).alias("p99"),
-).collect()[0]
-
-print("=== Claim Amount Distribution ===")
-print(f"  mean: ${amount_stats['mean']:.0f} | std: ${amount_stats['std']:.0f}")
-print(f"  p25: ${amount_stats['p25']:.0f} | p50: ${amount_stats['p50']:.0f} | p75: ${amount_stats['p75']:.0f}")
-print(f"  p95: ${amount_stats['p95']:.0f} | p99: ${amount_stats['p99']:.0f}")
-
-amount_mean = amount_stats['mean']
-amount_std = amount_stats['std']
-
-# COMMAND ----------
-
-# processing time distribution
-proc_stats = claims.filter(F.col("processing_days").isNotNull()).select(
-    F.mean("processing_days").alias("mean"),
-    F.stddev("processing_days").alias("std"),
-    F.percentile_approx("processing_days", 0.95).alias("p95"),
-).collect()[0]
-
-print(f"\n=== Processing Days Distribution ===")
-print(f"  mean: {proc_stats['mean']:.1f} | std: {proc_stats['std']:.1f} | p95: {proc_stats['p95']}")
-
-# COMMAND ----------
-
-# repeat claimant analysis
-# how many claims does a typical customer file?
-claims_per_policy = (claims
-    .groupBy("policy_id")
-    .agg(F.count("*").alias("claim_count"))
-    .select(
-        F.percentile_approx("claim_count", 0.50).alias("p50"),
-        F.percentile_approx("claim_count", 0.90).alias("p90"),
-        F.percentile_approx("claim_count", 0.95).alias("p95"),
-        F.max("claim_count").alias("max"),
-    )
-).collect()[0]
-
-print(f"\n=== Claims per Policy ===")
-print(f"  median: {claims_per_policy['p50']} | p90: {claims_per_policy['p90']} | p95: {claims_per_policy['p95']} | max: {claims_per_policy['max']}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Define Anomaly Rules
-# MAGIC
-# MAGIC 5 rules, each with a weight based on how strongly it indicates fraud.
-# MAGIC Weights are justified by the data distributions above.
-# MAGIC
-# MAGIC | Rule | Weight | Why |
-# MAGIC |------|--------|-----|
-# MAGIC | High amount (>2 std above mean) | 30% | Top 2.3% by amount - outliers deserve scrutiny |
-# MAGIC | Severity-amount mismatch | 25% | Minor severity + high claim = red flag |
-# MAGIC | Repeat claimant (3+ claims) | 20% | 95th percentile is ~2 claims - 3+ is unusual |
-# MAGIC | Missing police report on major incident | 15% | Major/Total Loss should always have a report |
-# MAGIC | Quick file (claim within 30 days of logging) | 10% | Known fraud pattern - file fast after incident |
-
-# COMMAND ----------
-
-# calculate z-score for amount
-z_threshold = 2.0
-
-scored_claims = (claims
-    # Rule 1: unusually high claim amount (z-score > 2)
-    .withColumn("amount_z_score",
-        (F.col("total_claim_amount") - F.lit(amount_mean)) / F.lit(amount_std)
-    )
-    .withColumn("rule_high_amount",
-        F.when(F.col("amount_z_score") > z_threshold, True).otherwise(False)
-    )
-    .withColumn("rule_high_amount_score",
-        F.when(F.col("rule_high_amount"), 30).otherwise(0)
-    )
-
-    # Rule 2: severity-amount mismatch
-    # minor/trivial severity but claim amount above 75th percentile
-    .withColumn("rule_severity_mismatch",
-        F.when(
-            (F.col("incident_severity").isin("Minor Damage", "Trivial Damage")) &
-            (F.col("total_claim_amount") > amount_stats['p75']),
-            True
-        ).otherwise(False)
-    )
-    .withColumn("rule_severity_mismatch_score",
-        F.when(F.col("rule_severity_mismatch"), 25).otherwise(0)
-    )
-
-    # Rule 3: repeat claimant (3+ claims on same policy)
-    .withColumn("policy_claim_count",
-        F.count("*").over(Window.partitionBy("policy_id"))
-    )
-    .withColumn("rule_repeat_claimant",
-        F.when(F.col("policy_claim_count") >= 3, True).otherwise(False)
-    )
-    .withColumn("rule_repeat_claimant_score",
-        F.when(F.col("rule_repeat_claimant"), 20).otherwise(0)
-    )
-
-    # Rule 4: missing police report on major incidents
-    .withColumn("rule_missing_report",
-        F.when(
-            (F.col("incident_severity").isin("Major Damage", "Total Loss")) &
-            (F.upper(F.col("police_report_available")) != "YES"),
-            True
-        ).otherwise(False)
-    )
-    .withColumn("rule_missing_report_score",
-        F.when(F.col("rule_missing_report"), 15).otherwise(0)
-    )
-
-    # Rule 5: suspiciously quick processing or claim close to incident
-    .withColumn("rule_quick_file",
-        F.when(
-            (F.col("processing_days").isNotNull()) & (F.col("processing_days") <= 1),
-            True
-        ).otherwise(False)
-    )
-    .withColumn("rule_quick_file_score",
-        F.when(F.col("rule_quick_file"), 10).otherwise(0)
-    )
-)
-
-# COMMAND ----------
-
-# compute total anomaly score (0-100)
-scored_claims = scored_claims.withColumn(
-    "anomaly_score",
-    F.col("rule_high_amount_score") +
-    F.col("rule_severity_mismatch_score") +
-    F.col("rule_repeat_claimant_score") +
-    F.col("rule_missing_report_score") +
-    F.col("rule_quick_file_score")
-)
-
-# classify priority
-scored_claims = scored_claims.withColumn(
-    "anomaly_priority",
-    F.when(F.col("anomaly_score") >= 50, "HIGH")
-     .when(F.col("anomaly_score") >= 25, "MEDIUM")
-     .when(F.col("anomaly_score") > 0, "LOW")
-     .otherwise("NONE")
-)
-
-# COMMAND ----------
-
-# how many flagged at each level?
-print("=== Anomaly Distribution ===")
-display(scored_claims.groupBy("anomaly_priority").count().orderBy(F.desc("count")))
-
-high_count = scored_claims.filter("anomaly_priority = 'HIGH'").count()
-total = scored_claims.count()
-print(f"\nHIGH priority: {high_count}/{total} ({high_count/total*100 if total > 0 else 0:.1f}%)")
-print("^ this is a realistic number for a fraud investigation team to handle")
-
-# COMMAND ----------
-
-# which rules fire most?
-print("\n=== Rule Trigger Rates ===")
-for rule in ["high_amount", "severity_mismatch", "repeat_claimant", "missing_report", "quick_file"]:
-    cnt = scored_claims.filter(F.col(f"rule_{rule}") == True).count()
-    print(f"  {rule:25s}: {cnt} ({cnt/total*100 if total > 0 else 0:.1f}%)")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Generate Investigation Briefs (LLM)
-# MAGIC
-# MAGIC For HIGH and MEDIUM priority claims, generate an AI investigation brief
-# MAGIC that a claims investigator can use to start their review.
-
-# COMMAND ----------
-
 from openai import OpenAI
+from tenacity import retry, stop_after_attempt, wait_random_exponential
+from pydantic import BaseModel, Field, field_validator
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
+# ── MLflow Tracing ──
+mlflow.openai.autolog()
+
+# ── LLM Connection ──
 DATABRICKS_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-DATABRICKS_URL = spark.conf.get("spark.databricks.workspaceUrl")
+WORKSPACE_URL = spark.conf.get("spark.databricks.workspaceUrl")
 
 client = OpenAI(
     api_key=DATABRICKS_TOKEN,
-    base_url=f"https://{DATABRICKS_URL}/serving-endpoints"
+    base_url=f"https://{WORKSPACE_URL}/serving-endpoints"
 )
 
-MODEL = "databricks-meta-llama-3-1-70b-instruct"
+# ── Constants ──
+MODEL_NAME = "databricks-gpt-oss-20b"
+MAX_TOKENS = 1500
+SOURCE_TABLE = "`databricks-hackathon-insurance`.silver.silver_claims"
+OUTPUT_TABLE = "`databricks-hackathon-insurance`.gold.claim_anomaly_explanations"
+PROMPT_VERSION = "v1"
 
-# COMMAND ----------
+# ── Scoring Thresholds ──
+HIGH_THRESHOLD = 60    # Auto-refer to SIU
+MEDIUM_THRESHOLD = 35  # Enhanced adjuster review
 
-# get HIGH priority claims as pandas for iteration
-high_claims = (scored_claims
-    .filter("anomaly_priority IN ('HIGH', 'MEDIUM')")
-    .orderBy(F.desc("anomaly_score"))
-    .limit(50)  # cap at 50 for API rate limits
-    .toPandas()
+# ── Response parser ──
+def extract_text(raw_response):
+    """Extracts text block from databricks-gpt-oss-20b structured response."""
+    if isinstance(raw_response, list):
+        parsed = raw_response
+    elif isinstance(raw_response, str):
+        try:
+            parsed = json.loads(raw_response)
+        except json.JSONDecodeError:
+            return raw_response
+    else:
+        return str(raw_response)
+    for block in parsed:
+        if block.get("type") == "text":
+            return block["text"]
+    return str(raw_response)
+
+# ── LLM call with retry ──
+@retry(
+    wait=wait_random_exponential(min=2, max=60),
+    stop=stop_after_attempt(5),
 )
+def call_llm(messages, max_tokens=MAX_TOKENS):
+    """Calls LLM and returns parsed dict."""
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=messages,
+        max_tokens=max_tokens,
+    )
+    raw = response.choices[0].message.content
+    text = extract_text(raw)
+    first_brace = text.find('{')
+    last_brace = text.rfind('}')
+    if first_brace != -1 and last_brace > first_brace:
+        return json.loads(text[first_brace:last_brace + 1])
+    return json.loads(text)
 
-print(f"generating briefs for {len(high_claims)} flagged claims...")
+# ── Guardrails ──
+def apply_guardrails(text):
+    text = re.sub(r'\b[\w.-]+@[\w.-]+\.\w+\b', '[REDACTED_EMAIL]', text)
+    text = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[REDACTED_PHONE]', text)
+    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]', text)
+    return text
 
-# COMMAND ----------
-
-def build_investigation_prompt(row):
-    triggered_rules = []
-    if row.get("rule_high_amount"):
-        triggered_rules.append(f"High claim amount (z-score: {row['amount_z_score']:.2f}, amount: ${row['total_claim_amount']:.0f})")
-    if row.get("rule_severity_mismatch"):
-        triggered_rules.append(f"Severity-amount mismatch ({row['incident_severity']} severity but ${row['total_claim_amount']:.0f} claim)")
-    if row.get("rule_repeat_claimant"):
-        triggered_rules.append(f"Repeat claimant ({row['policy_claim_count']} claims on this policy)")
-    if row.get("rule_missing_report"):
-        triggered_rules.append(f"Missing police report for {row['incident_severity']} incident")
-    if row.get("rule_quick_file"):
-        triggered_rules.append(f"Suspiciously quick processing ({row['processing_days']} days)")
-
-    rules_text = "\n".join(f"  - {r}" for r in triggered_rules)
-
-    return f"""You are a senior claims fraud investigator at PrimeInsurance.
-Generate a brief investigation summary for this flagged claim.
-
-CLAIM DETAILS:
-- Claim ID: {row['claim_id']}
-- Policy ID: {row['policy_id']}
-- Incident Date: {row['incident_date']}
-- Incident Type: {row['incident_type']}
-- Severity: {row['incident_severity']}
-- Location: {row.get('incident_city', 'N/A')}, {row.get('incident_state', 'N/A')}
-- Total Claim Amount: ${row['total_claim_amount']:.2f}
-  (Injury: ${row.get('injury', 0):.2f}, Property: ${row.get('property', 0):.2f}, Vehicle: ${row.get('vehicle', 0):.2f})
-- Vehicles Involved: {row.get('vehicles_involved', 'N/A')}
-- Bodily Injuries: {row.get('bodily_injuries', 'N/A')}
-- Witnesses: {row.get('witnesses', 'N/A')}
-- Police Report: {row.get('police_report_available', 'N/A')}
-- Claim Rejected: {row.get('claim_rejected', 'N/A')}
-- Processing Days: {row.get('processing_days', 'N/A')}
-
-ANOMALY SCORE: {row['anomaly_score']}/100 ({row['anomaly_priority']} priority)
-
-TRIGGERED RULES:
-{rules_text}
-
-Return ONLY valid JSON:
-{{
-  "investigation_summary": "2-3 sentence summary of what makes this claim suspicious, using specific data points",
-  "risk_factors": ["list of 2-4 specific risk factors based on the data"],
-  "recommended_actions": ["list of 2-3 specific investigation steps"],
-  "confidence_level": "High/Medium/Low - how confident are we this needs investigation"
-}}"""
+print(f"✅ Connected to {WORKSPACE_URL}")
+print(f"✅ Model: {MODEL_NAME}")
+print(f"✅ Thresholds: HIGH >= {HIGH_THRESHOLD}, MEDIUM >= {MEDIUM_THRESHOLD}")
 
 # COMMAND ----------
 
-# generate briefs
-results = []
+# ============================================================
+# PYDANTIC OUTPUT MODEL — Investigation Brief
+# ============================================================
 
-for idx, row in high_claims.iterrows():
-    if idx % 10 == 0:
-        print(f"  processing claim {idx+1}/{len(high_claims)}...")
+class InvestigationBrief(BaseModel):
+    """AI-generated investigation brief for a flagged claim."""
 
-    prompt = build_investigation_prompt(row)
+    what_is_suspicious: str = Field(min_length=20, description="What makes this claim suspicious, referencing specific data points")
+    risk_factors: str = Field(min_length=20, description="Which fraud risk factors are present and why they matter")
+    recommended_action: str = Field(min_length=20, description="Specific, actionable next steps for the investigator")
 
-    try:
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            temperature=0.3,
+    @field_validator('*', mode='before')
+    @classmethod
+    def clean_input(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            if v.lower() in ('n/a', 'none', 'null', '', '-'):
+                return "[Not provided by model — requires manual review]"
+        return v
+
+    def to_formatted_text(self) -> str:
+        return (
+            f"WHAT IS SUSPICIOUS:\n{self.what_is_suspicious}\n\n"
+            f"RISK FACTORS:\n{self.risk_factors}\n\n"
+            f"RECOMMENDED ACTION:\n{self.recommended_action}"
         )
-        content = response.choices[0].message.content.strip()
 
-        # clean up potential markdown wrapping
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-
-        brief = json.loads(content)
-    except (json.JSONDecodeError, Exception) as e:
-        brief = {
-            "investigation_summary": f"Auto-generated brief unavailable: {str(e)[:100]}",
-            "risk_factors": [],
-            "recommended_actions": ["Manual review required"],
-            "confidence_level": "Medium",
-        }
-
-    result = {
-        "claim_id": row["claim_id"],
-        "policy_id": row["policy_id"],
-        "incident_date": str(row["incident_date"]),
-        "incident_severity": row["incident_severity"],
-        "incident_type": row.get("incident_type", ""),
-        "total_claim_amount": float(row["total_claim_amount"]),
-        "anomaly_score": int(row["anomaly_score"]),
-        "anomaly_priority": row["anomaly_priority"],
-        "triggered_rules": ", ".join([
-            r for r, fired in [
-                ("high_amount", row.get("rule_high_amount")),
-                ("severity_mismatch", row.get("rule_severity_mismatch")),
-                ("repeat_claimant", row.get("rule_repeat_claimant")),
-                ("missing_report", row.get("rule_missing_report")),
-                ("quick_file", row.get("rule_quick_file")),
-            ] if fired
-        ]),
-        "investigation_summary": brief.get("investigation_summary", ""),
-        "risk_factors": json.dumps(brief.get("risk_factors", [])),
-        "recommended_actions": json.dumps(brief.get("recommended_actions", [])),
-        "confidence_level": brief.get("confidence_level", "Medium"),
-        "model_name": MODEL,
-        "generated_at": datetime.now().isoformat(),
-    }
-    results.append(result)
-
-print(f"\ngenerated {len(results)} investigation briefs")
+print("✅ Pydantic model ready")
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Write to Gold Table
+# ============================================================
+# LOAD CLAIMS DATA & COMPUTE TOTAL AMOUNT
+# ============================================================
+
+claims_df = spark.sql(f"SELECT * FROM {SOURCE_TABLE}")
+
+total_claims = claims_df.count()
+print(f"✅ Loaded {total_claims} claims from {SOURCE_TABLE}")
+claims_df.select("claim_id", "total_claim_amount", "incident_severity", "incident_type",
+                "bodily_injuries", "witnesses", "police_report_available").show(5, truncate=False)
 
 # COMMAND ----------
 
-anomaly_df = spark.createDataFrame(results)
+# ============================================================
+# ANOMALY DETECTION — 5 WEIGHTED FRAUD-INDICATOR RULES
+# ============================================================
+#
+# APPROACH:
+#   - Detection is 100% statistical (PySpark). No LLM involved.
+#   - The LLM is only used AFTER detection, to write investigation briefs.
+#   - "The LLM is not a classifier; it is an explainer."
+#
+# RULES & JUSTIFICATION:
+#
+# ┌────┬──────────────────────────────────┬────────┬─────────────────────────────────────────────┐
+# │ #  │ Rule                             │ Weight │ Why (Industry Basis)                        │
+# ├────┼──────────────────────────────────┼────────┼─────────────────────────────────────────────┤
+# │ 1  │ High claim amount (Z-score)      │ 25     │ Fraudulent claims are systematically        │
+# │    │                                  │        │ inflated. Robust Z-score (MAD-based)        │
+# │    │                                  │        │ catches top outliers. NICB Tier-1 indicator. │
+# ├────┼──────────────────────────────────┼────────┼─────────────────────────────────────────────┤
+# │ 2  │ Severity-amount mismatch         │ 25     │ A $50K claim on "Minor Damage" is           │
+# │    │                                  │        │ structurally suspicious. IQR method per      │
+# │    │                                  │        │ severity band detects mismatches.            │
+# ├────┼──────────────────────────────────┼────────┼─────────────────────────────────────────────┤
+# │ 3  │ No police report + high amount   │ 20     │ Legitimate high-value accidents almost       │
+# │    │                                  │        │ always have police reports. No report =      │
+# │    │                                  │        │ no independent verification. NICB top-10.    │
+# ├────┼──────────────────────────────────┼────────┼─────────────────────────────────────────────┤
+# │ 4  │ No witnesses + bodily injuries   │ 15     │ Injury claims with zero witnesses are hard   │
+# │    │                                  │        │ to verify. Common in staged accidents.       │
+# ├────┼──────────────────────────────────┼────────┼─────────────────────────────────────────────┤
+# │ 5  │ Single vehicle total loss        │ 15     │ "Owner give-ups" — intentionally destroying  │
+# │    │                                  │        │ a car to collect insurance. One of the most  │
+# │    │                                  │        │ common auto fraud schemes per NICB.          │
+# └────┴──────────────────────────────────┴────────┴─────────────────────────────────────────────┘
+#
+# SCORING: Max possible = 100. Threshold: HIGH >= 60, MEDIUM >= 35
+# ============================================================
 
-(anomaly_df.write
-    .format("delta")
-    .mode("overwrite")
-    .option("overwriteSchema", "true")
-    .saveAsTable("`databricks-hackathon-insurance`.gold.claim_anomaly_explanations"))
+# ── Rule 1: High Claim Amount Outlier (Robust Z-Score using MAD) ──
+# MAD (Median Absolute Deviation) is more robust than stddev for skewed data
+median_amount = claims_df.approxQuantile("total_claim_amount", [0.5], 0.01)[0]
+claims_with_dev = claims_df.withColumn("abs_deviation", F.abs(F.col("total_claim_amount") - F.lit(median_amount)))
+mad = claims_with_dev.approxQuantile("abs_deviation", [0.5], 0.01)[0]
+# Scale MAD to be consistent with stddev (1.4826 for normal distributions)
+mad_scaled = mad * 1.4826
 
-print(f"gold.claim_anomaly_explanations: {anomaly_df.count()} rows")
+scored_df = claims_df.withColumn(
+    "rule1_zscore",
+    F.round((F.col("total_claim_amount") - F.lit(median_amount)) / F.lit(mad_scaled), 2)
+).withColumn(
+    "rule1_amount_outlier",
+    F.when(F.col("rule1_zscore") > 2.0, 25).otherwise(0)
+)
+
+print(f"📊 Rule 1 — Amount Outlier (Robust Z-Score)")
+print(f"   Median amount: ${median_amount:,.0f}")
+print(f"   MAD (scaled): ${mad_scaled:,.0f}")
+print(f"   Threshold: Z > 2.0 → 25 points")
+print(f"   Flagged: {scored_df.filter(F.col('rule1_amount_outlier') > 0).count()} claims")
+
+
+# ── Rule 2: Severity-Amount Mismatch (IQR per severity band) ──
+severity_stats = claims_df.groupBy("incident_severity").agg(
+    F.expr("percentile_approx(total_claim_amount, 0.25)").alias("Q1"),
+    F.expr("percentile_approx(total_claim_amount, 0.75)").alias("Q3"),
+)
+severity_stats = severity_stats.withColumn("IQR", F.col("Q3") - F.col("Q1"))
+severity_stats = severity_stats.withColumn("upper_fence", F.col("Q3") + 1.5 * F.col("IQR"))
+
+scored_df = scored_df.join(
+    severity_stats.select("incident_severity", "upper_fence"),
+    "incident_severity",
+    "left"
+).withColumn(
+    "rule2_severity_mismatch",
+    F.when(F.col("total_claim_amount") > F.col("upper_fence"), 25).otherwise(0)
+).drop("upper_fence")
+
+print(f"\n📊 Rule 2 — Severity-Amount Mismatch (IQR)")
+severity_stats.show(truncate=False)
+print(f"   Flagged: {scored_df.filter(F.col('rule2_severity_mismatch') > 0).count()} claims")
+
+
+# ── Rule 3: No Police Report + High Amount ──
+scored_df = scored_df.withColumn(
+    "rule3_no_police_high_amount",
+    F.when(
+        (F.col("police_report_available") == "NO") &
+        (F.col("total_claim_amount") > F.lit(median_amount)),
+        20
+    ).otherwise(0)
+)
+
+print(f"\n📊 Rule 3 — No Police Report + High Amount")
+print(f"   Threshold: police_report = NO AND amount > ${median_amount:,.0f}")
+print(f"   Flagged: {scored_df.filter(F.col('rule3_no_police_high_amount') > 0).count()} claims")
+
+
+# ── Rule 4: No Witnesses + Bodily Injuries ──
+scored_df = scored_df.withColumn(
+    "rule4_no_witness_injuries",
+    F.when(
+        (F.col("witnesses") == 0) &
+        (F.col("bodily_injuries") > 0),
+        15
+    ).otherwise(0)
+)
+
+print(f"\n📊 Rule 4 — No Witnesses + Bodily Injuries")
+print(f"   Threshold: witnesses = 0 AND bodily_injuries > 0")
+print(f"   Flagged: {scored_df.filter(F.col('rule4_no_witness_injuries') > 0).count()} claims")
+
+
+# ── Rule 5: Single Vehicle Total Loss ──
+scored_df = scored_df.withColumn(
+    "rule5_single_vehicle_total_loss",
+    F.when(
+        (F.col("incident_type") == "Single Vehicle Collision") &
+        (F.col("incident_severity") == "Total Loss"),
+        15
+    ).otherwise(0)
+)
+
+print(f"\n📊 Rule 5 — Single Vehicle Total Loss")
+print(f"   Threshold: Single Vehicle Collision + Total Loss")
+print(f"   Flagged: {scored_df.filter(F.col('rule5_single_vehicle_total_loss') > 0).count()} claims")
+
+
+# ── Calculate Total Anomaly Score ──
+scored_df = scored_df.withColumn(
+    "anomaly_score",
+    F.col("rule1_amount_outlier") +
+    F.col("rule2_severity_mismatch") +
+    F.col("rule3_no_police_high_amount") +
+    F.col("rule4_no_witness_injuries") +
+    F.col("rule5_single_vehicle_total_loss")
+)
+
+# ── Assign Priority Tier ──
+scored_df = scored_df.withColumn(
+    "priority",
+    F.when(F.col("anomaly_score") >= HIGH_THRESHOLD, "HIGH")
+    .when(F.col("anomaly_score") >= MEDIUM_THRESHOLD, "MEDIUM")
+    .otherwise("LOW")
+)
+
+# ── Collect triggered rules as a string ──
+scored_df = scored_df.withColumn(
+    "triggered_rules",
+    F.concat_ws(", ",
+        F.when(F.col("rule1_amount_outlier") > 0, F.lit("Amount Outlier (Z-Score)")),
+        F.when(F.col("rule2_severity_mismatch") > 0, F.lit("Severity-Amount Mismatch (IQR)")),
+        F.when(F.col("rule3_no_police_high_amount") > 0, F.lit("No Police Report + High Amount")),
+        F.when(F.col("rule4_no_witness_injuries") > 0, F.lit("No Witnesses + Bodily Injuries")),
+        F.when(F.col("rule5_single_vehicle_total_loss") > 0, F.lit("Single Vehicle Total Loss")),
+    )
+)
+
+# ── Summary ──
+print(f"\n{'='*60}")
+print(f"  ANOMALY SCORING SUMMARY")
+print(f"{'='*60}")
+print(f"  Total claims scored: {total_claims}")
+print(f"  HIGH priority (>= {HIGH_THRESHOLD}): {scored_df.filter(F.col('priority') == 'HIGH').count()}")
+print(f"  MEDIUM priority (>= {MEDIUM_THRESHOLD}): {scored_df.filter(F.col('priority') == 'MEDIUM').count()}")
+print(f"  LOW priority (< {MEDIUM_THRESHOLD}): {scored_df.filter(F.col('priority') == 'LOW').count()}")
+flagged_count = scored_df.filter(F.col("priority").isin("HIGH", "MEDIUM")).count()
+print(f"  Total flagged for review: {flagged_count} ({flagged_count/total_claims*100:.1f}%)")
+print(f"{'='*60}")
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Sample Output
+# ============================================================
+# PREVIEW — All claims sorted by anomaly score
+# ============================================================
+
+display(scored_df.select(
+    "claim_id", "total_claim_amount", "incident_severity", "incident_type",
+    "anomaly_score", "priority", "triggered_rules",
+    "rule1_zscore", "bodily_injuries", "witnesses", "police_report_available"
+).orderBy(F.col("anomaly_score").desc()))
 
 # COMMAND ----------
 
-display(spark.table("`databricks-hackathon-insurance`.gold.claim_anomaly_explanations").orderBy(F.desc("anomaly_score")).limit(10))
+# ============================================================
+# GENERATE AI INVESTIGATION BRIEFS — Only for HIGH/MEDIUM claims
+# ============================================================
+# The LLM does NOT score claims. It writes investigation briefs
+# for claims that were ALREADY flagged by statistical rules.
+# ============================================================
+
+flagged_df = scored_df.filter(F.col("priority").isin("HIGH", "MEDIUM"))
+flagged_claims = [row.asDict() for row in flagged_df.collect()]
+
+print(f"📊 {len(flagged_claims)} claims to generate briefs for\n")
+
+if len(flagged_claims) == 0:
+    print("No claims flagged — nothing to send to LLM.")
+    results = []
+else:
+    SYSTEM_PROMPT = """You are a senior insurance fraud investigator at PrimeInsurance with 20 years of experience in auto claims fraud detection. You write investigation briefs for the
+Special Investigations Unit (SIU).
+
+You are given a claim that has been statistically flagged as anomalous by the automated scoring system. Your job is to write a concise investigation brief explaining WHY this claim is
+suspicious and WHAT the investigator should do next.
+
+You must always respond in json format with exactly these 3 keys:
+{
+    "what_is_suspicious": "2-3 sentences. Reference specific data points — dollar amounts, severity, number of vehicles, witnesses. Explain what pattern the data shows.",
+    "risk_factors": "2-3 sentences. Which specific fraud indicators are present. Reference industry patterns like staged accidents, owner give-ups, inflated claims.",
+    "recommended_action": "2-3 sentences. Specific next steps — not generic. Reference what to verify, who to interview, what records to pull."
+}
+
+<constraints>
+- Reference the ACTUAL numbers from the claim data
+- Do NOT invent facts not present in the claim
+- Do NOT be vague — an investigator must be able to act on your brief
+- Focus on the triggered rules and explain why they matter together
+</constraints>"""
+
+    USER_PROMPT_TEMPLATE = """<example>
+Claim: CLM-999 | Score: 70/100 (HIGH) | Rules: Amount Outlier (Z-Score), No Police Report + High Amount, No Witnesses + Bodily Injuries
+Total: $95,000 | Type: Multi-vehicle Collision | Severity: Total Loss | Vehicles: 4 | Injuries: 3 | Witnesses: 0 | Police: NO
+
+Response:
+{{
+    "what_is_suspicious": "This $95,000 multi-vehicle collision claim triggers three independent fraud indicators simultaneously. The claim amount is a statistical outlier (z-score > 2.0), yet there is no police report for a Total Loss incident involving 4 vehicles and 3 bodily injuries. The complete absence of witnesses in a 4-vehicle accident is highly unusual.",
+    "risk_factors": "The combination of high amount + no police report + no witnesses is a classic staged accident pattern per NICB guidelines. Legitimate multi-vehicle Total Loss incidents nearly always generate police reports and have bystander witnesses. The 3 bodily injury claims without independent verification raise phantom passenger concerns.",
+    "recommended_action": "Pull the claimant's prior claims history across all 6 regional systems to check for repeat filing patterns. Request the body shop repair estimate and cross-reference with independent damage assessment. Interview each bodily injury claimant separately to verify they were present at the scene."
+}}
+</example>
+
+Now generate a brief for this claim:
+
+- Claim ID: {claim_id}
+- Anomaly Score: {anomaly_score}/100 (Priority: {priority})
+- Triggered Rules: {triggered_rules}
+
+Claim Details:
+- Total Amount: ${total_claim_amount:,.0f} (Injury: ${injury_amount:,.0f}, Property: ${property_amount:,.0f}, Vehicle: ${vehicle_amount:,.0f})
+- Incident Type: {incident_type}
+- Collision Type: {collision_type}
+- Severity: {incident_severity}
+- Vehicles Involved: {num_vehicles_involved}
+- Bodily Injuries: {bodily_injuries}
+- Witnesses: {witnesses}
+- Police Report: {police_report_available}
+- Authorities Contacted: {authorities_contacted}
+- Claim Rejected: {claim_rejected}
+- Location: {incident_city}, {incident_state}
+- Incident Date: {incident_date}
+- Claim Logged: {claim_logged_on}
+- Claim Processed: {claim_processed_on}"""
+
+    mlflow.set_experiment("/Users/abhinav.sarkar@jellyfishtechnologies.com/primeinsurance-hackathon/claims_anomaly")
+
+    results = []
+
+    with mlflow.start_run(run_name=f"claims_anomaly_{datetime.now().strftime('%Y%m%d_%H%M')}") as run:
+
+        mlflow.set_tags({
+            "model": MODEL_NAME,
+            "prompt_version": PROMPT_VERSION,
+            "pipeline": "claims_anomaly",
+            "source_table": SOURCE_TABLE,
+            "output_table": OUTPUT_TABLE,
+        })
+        mlflow.log_params({
+            "total_claims": total_claims,
+            "flagged_claims": len(flagged_claims),
+            "high_threshold": HIGH_THRESHOLD,
+            "medium_threshold": MEDIUM_THRESHOLD,
+            "num_rules": 5,
+            "model": MODEL_NAME,
+        })
+
+        success_count = 0
+        fail_count = 0
+
+        for idx, claim in enumerate(flagged_claims):
+            issue_start = datetime.now()
+
+            try:
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": USER_PROMPT_TEMPLATE.format(**claim)},
+                ]
+
+                data = call_llm(messages)
+                brief = InvestigationBrief(**data)
+                formatted = apply_guardrails(brief.to_formatted_text())
+
+                duration_ms = int((datetime.now() - issue_start).total_seconds() * 1000)
+
+                results.append({
+                    "claim_id": claim["claim_id"],
+                    "total_claim_amount": float(claim["total_claim_amount"]),
+                    "incident_severity": claim["incident_severity"],
+                    "incident_type": claim["incident_type"],
+                    "anomaly_score": int(claim["anomaly_score"]),
+                    "priority": claim["priority"],
+                    "triggered_rules": claim["triggered_rules"],
+                    "what_is_suspicious": brief.what_is_suspicious,
+                    "risk_factors": brief.risk_factors,
+                    "recommended_action": brief.recommended_action,
+                    "investigation_brief": formatted,
+                    "model_name": MODEL_NAME,
+                    "prompt_version": PROMPT_VERSION,
+                    "generated_at": datetime.now().isoformat(),
+                    "generation_status": "SUCCESS",
+                    "duration_ms": duration_ms,
+                })
+
+                success_count += 1
+                print(f"✅ [{idx+1}/{len(flagged_claims)}] {claim['claim_id']} | Score: {claim['anomaly_score']} | {claim['priority']} — {duration_ms}ms")
+
+            except Exception as e:
+                fail_count += 1
+                duration_ms = int((datetime.now() - issue_start).total_seconds() * 1000)
+
+                results.append({
+                    "claim_id": claim["claim_id"],
+                    "total_claim_amount": float(claim["total_claim_amount"]),
+                    "incident_severity": claim["incident_severity"],
+                    "incident_type": claim["incident_type"],
+                    "anomaly_score": int(claim["anomaly_score"]),
+                    "priority": claim["priority"],
+                    "triggered_rules": claim["triggered_rules"],
+                    "what_is_suspicious": f"Generation failed: {str(e)}",
+                    "risk_factors": "",
+                    "recommended_action": "",
+                    "investigation_brief": f"Generation failed: {str(e)}",
+                    "model_name": MODEL_NAME,
+                    "prompt_version": PROMPT_VERSION,
+                    "generated_at": datetime.now().isoformat(),
+                    "generation_status": "FAILED",
+                    "duration_ms": duration_ms,
+                })
+                print(f"[{idx+1}/{len(flagged_claims)}] {claim['claim_id']} | Error: {e}")
+
+        total_duration = sum(r["duration_ms"] for r in results)
+        mlflow.log_metrics({
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "success_rate": success_count / len(flagged_claims) if flagged_claims else 0,
+            "total_duration_ms": total_duration,
+            "avg_duration_ms": total_duration / len(results) if results else 0,
+            "high_priority_count": sum(1 for r in results if r["priority"] == "HIGH"),
+            "medium_priority_count": sum(1 for r in results if r["priority"] == "MEDIUM"),
+        })
+
+        print(f"\n{'='*60}")
+        print(f"  RESULTS: {success_count} succeeded, {fail_count} failed")
+        print(f"  Total time: {total_duration/1000:.1f}s")
+        print(f"  MLflow Run: {run.info.run_id}")
+        print(f"{'='*60}")
 
 # COMMAND ----------
 
-# print a few high-priority briefs in readable format
-for r in sorted(results, key=lambda x: -x["anomaly_score"])[:3]:
-    print(f"\n{'='*60}")
-    print(f"CLAIM: {r['claim_id']} | Score: {r['anomaly_score']}/100 | Priority: {r['anomaly_priority']}")
-    print(f"Amount: ${r['total_claim_amount']:.0f} | Severity: {r['incident_severity']} | Type: {r['incident_type']}")
-    print(f"Rules Triggered: {r['triggered_rules']}")
-    print(f"\nInvestigation Summary:")
-    print(f"  {r['investigation_summary']}")
-    print(f"\nRisk Factors: {r['risk_factors']}")
-    print(f"Actions: {r['recommended_actions']}")
-    print(f"Confidence: {r['confidence_level']}")
+# ============================================================
+# PREVIEW INVESTIGATION BRIEFS
+# ============================================================
+
+if results:
+    for r in results:
+        priority_icon = {"HIGH": "🔴", "MEDIUM": "🟠"}.get(r["priority"], "⚪")
+        print("=" * 70)
+        print(f"  {priority_icon} {r['claim_id']} | Score: {r['anomaly_score']}/100 | {r['priority']}")
+        print(f"  Amount: ${r['total_claim_amount']:,.0f} | {r['incident_severity']} | {r['incident_type']}")
+        print(f"  Rules: {r['triggered_rules']}")
+        print("=" * 70)
+        print(r["investigation_brief"])
+        print()
+else:
+    print("No briefs to preview.")
+
+# COMMAND ----------
+
+# ============================================================
+# SAVE TO GOLD TABLE
+# ============================================================
+
+if results:
+    results_df = spark.createDataFrame(results)
+
+    table_exists = spark.catalog.tableExists(OUTPUT_TABLE)
+
+    if not table_exists:
+        results_df.write.mode("overwrite").saveAsTable(OUTPUT_TABLE)
+        print(f"✅ Created {OUTPUT_TABLE} with {len(results)} rows")
+    else:
+        results_df.createOrReplaceTempView("new_anomalies")
+        spark.sql(f"""
+            MERGE INTO {OUTPUT_TABLE} AS target
+            USING new_anomalies AS source
+            ON target.claim_id = source.claim_id
+            WHEN MATCHED THEN UPDATE SET *
+            WHEN NOT MATCHED THEN INSERT *
+        """)
+        print(f"✅ Merged {len(results)} rows into {OUTPUT_TABLE}")
+
+    total = spark.sql(f"SELECT COUNT(*) as cnt FROM {OUTPUT_TABLE}").collect()[0]["cnt"]
+    print(f"📊 Total rows in {OUTPUT_TABLE}: {total}")
+else:
+    print("No results to save.")
+
+# COMMAND ----------
+
+# ============================================================
+# VERIFY FINAL OUTPUT
+# ============================================================
+
+display(spark.sql(f"""
+    SELECT
+        claim_id,
+        anomaly_score,
+        priority,
+        total_claim_amount,
+        incident_severity,
+        triggered_rules,
+        generation_status,
+        duration_ms,
+        LEFT(what_is_suspicious, 120) as suspicious_preview,
+        LEFT(recommended_action, 120) as action_preview
+    FROM {OUTPUT_TABLE}
+    ORDER BY anomaly_score DESC
+"""))
