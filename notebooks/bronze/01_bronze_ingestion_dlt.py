@@ -8,7 +8,7 @@
 # MAGIC - Auto Loader (cloudFiles) tracks processed files, so re-runs with no new files add zero records
 # MAGIC - mergeSchema handles different columns across regional files (e.g. CustomerID vs Customer_ID vs cust_id)
 # MAGIC - No renaming, no cleaning, no type casting. Data lands exactly as received
-# MAGIC - _source_file and _load_timestamp added to every record for traceability
+# MAGIC - _source_file and _load_timestamp added to every record via _metadata.file_path
 # MAGIC
 # MAGIC **Tables created:**
 # MAGIC - primeins.bronze.customers (7 CSV files from all regions)
@@ -34,6 +34,10 @@ VOLUME_PATH = "/Volumes/primeins/bronze/raw_data"
 # MAGIC different column sets (some missing HHInsurance, Education), and
 # MAGIC different region formats (W/C/E vs West/Central/East).
 # MAGIC All of this is preserved as-is in Bronze.
+# MAGIC
+# MAGIC We use recursiveFileLookup with a pathGlobFilter to pick up all
+# MAGIC customers_*.csv files from any depth, avoiding the need for union
+# MAGIC which fails when column counts differ.
 
 # COMMAND ----------
 
@@ -50,16 +54,9 @@ def customers():
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
         .option("header", "true")
         .option("recursiveFileLookup", "true")
-        .load(f"{VOLUME_PATH}/*/customers_*.csv")
-        .union(
-            spark.readStream.format("cloudFiles")
-            .option("cloudFiles.format", "csv")
-            .option("cloudFiles.inferColumnTypes", "true")
-            .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
-            .option("header", "true")
-            .load(f"{VOLUME_PATH}/customers_*.csv")
-        )
-        .withColumn("_source_file", F.input_file_name())
+        .option("pathGlobFilter", "customers_*.csv")
+        .load(VOLUME_PATH)
+        .withColumn("_source_file", F.col("_metadata.file_name"))
         .withColumn("_load_timestamp", F.current_timestamp())
     )
 
@@ -71,6 +68,9 @@ def customers():
 # MAGIC All fields are stored as strings in the source JSON (including numeric fields
 # MAGIC like injury, property, vehicle). Date fields contain corrupted values like "27:00.0".
 # MAGIC Everything is preserved as-is — Silver handles the type casting and date repair.
+# MAGIC
+# MAGIC inferColumnTypes is set to false to preserve all fields as strings, matching
+# MAGIC the source JSON exactly.
 
 # COMMAND ----------
 
@@ -86,15 +86,9 @@ def claims():
         .option("cloudFiles.inferColumnTypes", "false")
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
         .option("recursiveFileLookup", "true")
-        .load(f"{VOLUME_PATH}/*/claims_*.json")
-        .union(
-            spark.readStream.format("cloudFiles")
-            .option("cloudFiles.format", "json")
-            .option("cloudFiles.inferColumnTypes", "false")
-            .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
-            .load(f"{VOLUME_PATH}/claims_*.json")
-        )
-        .withColumn("_source_file", F.input_file_name())
+        .option("pathGlobFilter", "claims_*.json")
+        .load(VOLUME_PATH)
+        .withColumn("_source_file", F.col("_metadata.file_name"))
         .withColumn("_load_timestamp", F.current_timestamp())
     )
 
@@ -121,8 +115,9 @@ def policy():
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
         .option("header", "true")
         .option("recursiveFileLookup", "true")
-        .load(f"{VOLUME_PATH}/*/policy.csv")
-        .withColumn("_source_file", F.input_file_name())
+        .option("pathGlobFilter", "policy.csv")
+        .load(VOLUME_PATH)
+        .withColumn("_source_file", F.col("_metadata.file_name"))
         .withColumn("_load_timestamp", F.current_timestamp())
     )
 
@@ -133,7 +128,7 @@ def policy():
 # MAGIC 3 CSV files across Insurance_1, Insurance_2, Insurance_3.
 # MAGIC Consistent schema across all three files (rare for this dataset).
 # MAGIC Note: Insurance_1 has "Sales_2.csv" with capital S — the glob pattern
-# MAGIC handles both cases. Records with no sold_on date represent unsold inventory.
+# MAGIC [Ss]ales_*.csv handles both cases.
 
 # COMMAND ----------
 
@@ -151,8 +146,8 @@ def sales():
         .option("header", "true")
         .option("recursiveFileLookup", "true")
         .option("pathGlobFilter", "[Ss]ales_*.csv")
-        .load(f"{VOLUME_PATH}")
-        .withColumn("_source_file", F.input_file_name())
+        .load(VOLUME_PATH)
+        .withColumn("_source_file", F.col("_metadata.file_name"))
         .withColumn("_load_timestamp", F.current_timestamp())
     )
 
@@ -179,7 +174,8 @@ def cars():
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
         .option("header", "true")
         .option("recursiveFileLookup", "true")
-        .load(f"{VOLUME_PATH}/*/cars.csv")
-        .withColumn("_source_file", F.input_file_name())
+        .option("pathGlobFilter", "cars.csv")
+        .load(VOLUME_PATH)
+        .withColumn("_source_file", F.col("_metadata.file_name"))
         .withColumn("_load_timestamp", F.current_timestamp())
     )
