@@ -88,10 +88,10 @@ assert missing == 0, f"{missing} files are missing from the volume"
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Grant usage on catalog to all team members
-# MAGIC GRANT USAGE ON CATALOG primeins TO `abhinav.sarkar@jellyfishtechnologies.com`;
-# MAGIC GRANT USAGE ON CATALOG primeins TO `aksingh@jellyfishtechnologies.com`;
-# MAGIC GRANT USAGE ON CATALOG primeins TO `paras.dhyani@jellyfishtechnologies.com`;
+# MAGIC -- Grant catalog-level access to all team members
+# MAGIC GRANT USE CATALOG, USE SCHEMA, CREATE SCHEMA ON CATALOG primeins TO `abhinav.sarkar@jellyfishtechnologies.com`;
+# MAGIC GRANT USE CATALOG, USE SCHEMA, CREATE SCHEMA ON CATALOG primeins TO `aksingh@jellyfishtechnologies.com`;
+# MAGIC GRANT USE CATALOG, USE SCHEMA, CREATE SCHEMA ON CATALOG primeins TO `paras.dhyani@jellyfishtechnologies.com`;
 
 # COMMAND ----------
 
@@ -112,10 +112,10 @@ assert missing == 0, f"{missing} files are missing from the volume"
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Grant volume access
-# MAGIC GRANT READ VOLUME ON VOLUME primeins.bronze.raw_data TO `abhinav.sarkar@jellyfishtechnologies.com`;
-# MAGIC GRANT READ VOLUME ON VOLUME primeins.bronze.raw_data TO `aksingh@jellyfishtechnologies.com`;
-# MAGIC GRANT READ VOLUME ON VOLUME primeins.bronze.raw_data TO `paras.dhyani@jellyfishtechnologies.com`;
+# MAGIC -- Grant volume access (read + write)
+# MAGIC GRANT READ VOLUME, WRITE VOLUME ON VOLUME primeins.bronze.raw_data TO `abhinav.sarkar@jellyfishtechnologies.com`;
+# MAGIC GRANT READ VOLUME, WRITE VOLUME ON VOLUME primeins.bronze.raw_data TO `aksingh@jellyfishtechnologies.com`;
+# MAGIC GRANT READ VOLUME, WRITE VOLUME ON VOLUME primeins.bronze.raw_data TO `paras.dhyani@jellyfishtechnologies.com`;
 
 # COMMAND ----------
 
