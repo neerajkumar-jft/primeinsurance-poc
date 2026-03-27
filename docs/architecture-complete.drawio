@@ -597,7 +597,7 @@
     </mxGraphModel>
   </diagram>
   <diagram id="genai-integration" name="4. Gen AI Integration">
-    <mxGraphModel dx="1573" dy="772" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+    <mxGraphModel dx="1416" dy="753" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -697,7 +697,7 @@
         <mxCell id="ai_uc4_box" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#E6F3FF;fillOpacity=30;strokeColor=#4A90D9;strokeWidth=2;" value="" vertex="1">
           <mxGeometry height="300" width="350" x="680" y="110" as="geometry" />
         </mxCell>
-        <mxCell id="ai_uc4_title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontColor=#2C5F8A;" value="UC4: AI Business Insights (Extra)" vertex="1">
+        <mxCell id="ai_uc4_title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontColor=#2C5F8A;" value="UC4: AI Business Insights (Bonus)" vertex="1">
           <mxGeometry height="22" width="300" x="695" y="115" as="geometry" />
         </mxCell>
         <mxCell id="ai_uc4_in" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#4A90D9;align=left;spacingLeft=5;" value="INPUT: all Gold tables&#xa;&#xa;Aggregate first (never raw rows):&#xa;- COUNT, AVG, SUM by key&#xa;- Distribution by region&#xa;- Rejection rates, processing times&#xa;- Inventory aging stats" vertex="1">
