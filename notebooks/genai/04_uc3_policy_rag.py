@@ -45,9 +45,12 @@ warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
 # ============================================================
 
 dbutils.widgets.text("catalog", "primeins")
+dbutils.widgets.text("run_test_queries", "true")
 CATALOG = dbutils.widgets.get("catalog")
+RUN_TEST_QUERIES = dbutils.widgets.get("run_test_queries").lower() == "true"
 spark.sql(f"USE CATALOG `{CATALOG}`")
 print(f"Catalog: {CATALOG}")
+print(f"Run test queries: {RUN_TEST_QUERIES}")
 
 # COMMAND ----------
 
@@ -416,7 +419,17 @@ print("RAG query engine initialized")
 #   3. Filter-based question
 #   4. Coverage/deductible question
 #   5. Umbrella coverage question
+#
+# Controlled by run_test_queries parameter (default: true).
+# The end-to-end pipeline job passes false to avoid duplicate
+# query history rows on re-runs.
 # ============================================================
+
+if not RUN_TEST_QUERIES:
+    print("Skipping test queries (run_test_queries=false)")
+    print("FAISS index built and RAG engine ready. Run manually to test.")
+    all_results = []
+    dbutils.notebook.exit("FAISS index built. Test queries skipped.")
 
 test_questions = [
     # Type 1: Specific policy lookup
