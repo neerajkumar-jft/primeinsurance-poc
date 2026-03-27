@@ -267,7 +267,7 @@ UC1 -- DQ Explainer (Easy)
 - Output: `primeins.gold.dq_explanation_report`
 
 UC2 -- Claims Anomaly Detection (Medium)
-- Reads: `primeins.silver.claims` + Gold dimensions for context
+- Reads: `primeins.silver.claims`
 - Process: PySpark statistical scoring with 5+ weighted fraud-indicator rules, then LLM generates investigation briefs for flagged claims
 - Output: `primeins.gold.claim_anomaly_explanations`
 

@@ -197,7 +197,7 @@
         <mxCell id="df_genai_uc1" value="UC1: DQ Explainer&#xa;silver.dq_issues → LLM&#xa;→ gold.dq_explanation_report" style="rounded=1;whiteSpace=wrap;html=1;fontSize=8;fillColor=#FFFFFF;strokeColor=#4A90D9;align=left;spacingLeft=3;" vertex="1" parent="1">
           <mxGeometry x="695" y="775" width="175" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="df_genai_uc2" value="UC2: Anomaly Detection&#xa;silver.claims + gold dims → scoring&#xa;→ LLM → gold.claim_anomaly_explanations" style="rounded=1;whiteSpace=wrap;html=1;fontSize=8;fillColor=#FFFFFF;strokeColor=#4A90D9;align=left;spacingLeft=3;" vertex="1" parent="1">
+        <mxCell id="df_genai_uc2" value="UC2: Anomaly Detection&#xa;silver.claims → scoring&#xa;→ LLM → gold.claim_anomaly_explanations" style="rounded=1;whiteSpace=wrap;html=1;fontSize=8;fillColor=#FFFFFF;strokeColor=#4A90D9;align=left;spacingLeft=3;" vertex="1" parent="1">
           <mxGeometry x="880" y="775" width="210" height="50" as="geometry" />
         </mxCell>
         <mxCell id="df_genai_uc3" value="UC3: RAG + Genie NLQ&#xa;gold.dim_policy → chunks → FAISS&#xa;→ LLM → gold.rag_query_history" style="rounded=1;whiteSpace=wrap;html=1;fontSize=8;fillColor=#FFFFFF;strokeColor=#4A90D9;align=left;spacingLeft=3;" vertex="1" parent="1">
@@ -643,7 +643,7 @@
         <mxCell id="ai_uc2_title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontColor=#2C5F8A;" value="UC2: Claims Anomaly Detection (Medium)" vertex="1">
           <mxGeometry height="22" width="350" x="55" y="315" as="geometry" />
         </mxCell>
-        <mxCell id="ai_uc2_in" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#4A90D9;align=left;spacingLeft=5;" value="INPUT&#xa;primeins.silver.claims&#xa;+ gold.dim_policy&#xa;+ gold.dim_customer&#xa;&#xa;All claim fields + policy&#xa;and customer context" vertex="1">
+        <mxCell id="ai_uc2_in" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#4A90D9;align=left;spacingLeft=5;" value="INPUT&#xa;primeins.silver.claims&#xa;&#xa;All claim fields: amounts,&#xa;severity, incident type,&#xa;rejection status, policy_id" vertex="1">
           <mxGeometry height="100" width="140" x="55" y="345" as="geometry" />
         </mxCell>
         <mxCell id="ai_uc2_process" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#4A90D9;align=left;spacingLeft=5;" value="PROCESS&#xa;&#xa;1. PySpark: score every claim&#xa;   against 5+ weighted rules&#xa;   (high amount, severity mismatch,&#xa;   repeat claimant, etc.)&#xa;2. Filter: anomaly_score &gt; threshold&#xa;3. LLM: generate investigation&#xa;   brief for each flagged claim" vertex="1">
