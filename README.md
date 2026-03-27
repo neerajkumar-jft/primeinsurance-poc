@@ -48,6 +48,7 @@ primeinsurance-poc/
       02_silver_dlt_pipeline.py         # harmonization, quality rules, quarantine
     gold/
       03_gold_dlt_pipeline.py           # star schema, fact tables, materialized views
+      05_executive_dashboard.py         # dashboard queries for all business metrics
     genai/
       04_uc1_dq_explanations.py         # DQ log -> plain English for compliance
       04_uc2_anomaly_engine.py          # fraud scoring + investigation briefs
