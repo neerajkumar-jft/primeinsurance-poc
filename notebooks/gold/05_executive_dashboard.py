@@ -2,9 +2,8 @@
 # MAGIC %md
 # MAGIC # PrimeInsurance Executive Dashboard
 # MAGIC
-# MAGIC This notebook provides all dashboard queries for the Gold layer.
-# MAGIC Use these to create a Databricks SQL Dashboard or run directly
-# MAGIC for a quick view of all metrics.
+# MAGIC All queries use hardcoded `primeins` catalog for easy copy-paste into
+# MAGIC Databricks SQL Dashboard widgets.
 # MAGIC
 # MAGIC **Sections:**
 # MAGIC 1. Executive overview (KPI counters)
@@ -13,12 +12,7 @@
 # MAGIC 4. Inventory & revenue (unsold cars, aging, sell-through)
 # MAGIC 5. Data quality (DQ issues, AI explanations)
 # MAGIC 6. Fraud detection (anomaly scores, flagged claims)
-
-# COMMAND ----------
-
-dbutils.widgets.text("catalog", "primeins")
-CATALOG = dbutils.widgets.get("catalog")
-spark.sql(f"USE CATALOG `{CATALOG}`")
+# MAGIC 7. Policy portfolio
 
 # COMMAND ----------
 
@@ -32,17 +26,16 @@ spark.sql(f"USE CATALOG `{CATALOG}`")
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  (SELECT COUNT(DISTINCT customer_id) FROM `{CATALOG}`.gold.dim_customer) as unique_customers,
-  (SELECT COUNT(*) FROM `{CATALOG}`.gold.dim_policy) as active_policies,
-  (SELECT COUNT(*) FROM `{CATALOG}`.gold.fact_claims) as total_claims,
-  (SELECT ROUND(SUM(CASE WHEN is_rejected THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) FROM `{CATALOG}`.gold.fact_claims) as rejection_rate_pct,
-  (SELECT COUNT(*) FROM `{CATALOG}`.gold.fact_sales) as total_listings,
-  (SELECT ROUND(SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) FROM `{CATALOG}`.gold.fact_sales) as sell_through_pct,
-  (SELECT SUM(CASE WHEN NOT is_sold AND days_listed > 60 THEN 1 ELSE 0 END) FROM `{CATALOG}`.gold.fact_sales) as aging_inventory,
-  (SELECT COUNT(*) FROM `{CATALOG}`.gold.claim_anomaly_explanations WHERE priority = 'HIGH') as high_risk_claims
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   (SELECT COUNT(DISTINCT customer_id) FROM primeins.gold.dim_customer) as unique_customers,
+# MAGIC   (SELECT COUNT(*) FROM primeins.gold.dim_policy) as active_policies,
+# MAGIC   (SELECT COUNT(*) FROM primeins.gold.fact_claims) as total_claims,
+# MAGIC   (SELECT ROUND(SUM(CASE WHEN is_rejected THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) FROM primeins.gold.fact_claims) as rejection_rate_pct,
+# MAGIC   (SELECT COUNT(*) FROM primeins.gold.fact_sales) as total_listings,
+# MAGIC   (SELECT ROUND(SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) FROM primeins.gold.fact_sales) as sell_through_pct,
+# MAGIC   (SELECT SUM(CASE WHEN NOT is_sold AND days_listed > 60 THEN 1 ELSE 0 END) FROM primeins.gold.fact_sales) as aging_inventory,
+# MAGIC   (SELECT COUNT(*) FROM primeins.gold.claim_anomaly_explanations WHERE priority = 'HIGH') as high_risk_claims
 
 # COMMAND ----------
 
@@ -56,16 +49,15 @@ SELECT
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  policy_csl as coverage_tier,
-  total_claims,
-  rejected_claims,
-  ROUND(rejection_rate_pct, 1) as rejection_rate_pct,
-  ROUND(avg_claim_amount, 2) as avg_claim_amount
-FROM `{CATALOG}`.gold.mv_rejection_rate_by_policy
-ORDER BY rejection_rate_pct DESC
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   policy_csl as coverage_tier,
+# MAGIC   total_claims,
+# MAGIC   rejected_claims,
+# MAGIC   ROUND(rejection_rate_pct, 1) as rejection_rate_pct,
+# MAGIC   ROUND(avg_claim_amount, 2) as avg_claim_amount
+# MAGIC FROM primeins.gold.mv_rejection_rate_by_policy
+# MAGIC ORDER BY rejection_rate_pct DESC
 
 # COMMAND ----------
 
@@ -74,17 +66,16 @@ ORDER BY rejection_rate_pct DESC
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  incident_severity,
-  total_claims,
-  rejected_claims,
-  ROUND(rejection_rate_pct, 1) as rejection_rate_pct,
-  ROUND(avg_claim_amount, 2) as avg_claim_amount,
-  ROUND(total_claim_value, 2) as total_claim_value
-FROM `{CATALOG}`.gold.mv_claims_by_severity
-ORDER BY total_claims DESC
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   incident_severity,
+# MAGIC   total_claims,
+# MAGIC   rejected_claims,
+# MAGIC   ROUND(rejection_rate_pct, 1) as rejection_rate_pct,
+# MAGIC   ROUND(avg_claim_amount, 2) as avg_claim_amount,
+# MAGIC   ROUND(total_claim_value, 2) as total_claim_value
+# MAGIC FROM primeins.gold.mv_claims_by_severity
+# MAGIC ORDER BY total_claims DESC
 
 # COMMAND ----------
 
@@ -93,17 +84,16 @@ ORDER BY total_claims DESC
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  region,
-  total_claims,
-  rejected_claims,
-  ROUND(rejection_rate_pct, 1) as rejection_rate_pct,
-  ROUND(avg_claim_amount, 2) as avg_claim_amount,
-  ROUND(total_claim_value, 2) as total_claim_value
-FROM `{CATALOG}`.gold.mv_claims_by_region
-ORDER BY total_claims DESC
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   region,
+# MAGIC   total_claims,
+# MAGIC   rejected_claims,
+# MAGIC   ROUND(rejection_rate_pct, 1) as rejection_rate_pct,
+# MAGIC   ROUND(avg_claim_amount, 2) as avg_claim_amount,
+# MAGIC   ROUND(total_claim_value, 2) as total_claim_value
+# MAGIC FROM primeins.gold.mv_claims_by_region
+# MAGIC ORDER BY total_claims DESC
 
 # COMMAND ----------
 
@@ -112,20 +102,19 @@ ORDER BY total_claims DESC
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  claim_id,
-  policy_number,
-  incident_severity,
-  incident_type,
-  ROUND(total_claim_amount, 2) as total_amount,
-  CASE WHEN is_rejected THEN 'Rejected' ELSE 'Approved' END as status,
-  incident_state,
-  incident_city
-FROM `{CATALOG}`.gold.fact_claims
-ORDER BY total_claim_amount DESC
-LIMIT 10
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   claim_id,
+# MAGIC   policy_number,
+# MAGIC   incident_severity,
+# MAGIC   incident_type,
+# MAGIC   ROUND(total_claim_amount, 2) as total_amount,
+# MAGIC   CASE WHEN is_rejected THEN 'Rejected' ELSE 'Approved' END as status,
+# MAGIC   incident_state,
+# MAGIC   incident_city
+# MAGIC FROM primeins.gold.fact_claims
+# MAGIC ORDER BY total_claim_amount DESC
+# MAGIC LIMIT 10
 
 # COMMAND ----------
 
@@ -139,18 +128,17 @@ LIMIT 10
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.customers) as raw_records,
-  (SELECT COUNT(*) FROM `{CATALOG}`.gold.dim_customer) as unique_customers,
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.customers) -
-    (SELECT COUNT(*) FROM `{CATALOG}`.gold.dim_customer) as duplicates_resolved,
-  ROUND(
-    ((SELECT COUNT(*) FROM `{CATALOG}`.silver.customers) -
-     (SELECT COUNT(*) FROM `{CATALOG}`.gold.dim_customer)) * 100.0 /
-    (SELECT COUNT(*) FROM `{CATALOG}`.silver.customers), 1
-  ) as dedup_rate_pct
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.customers) as raw_records,
+# MAGIC   (SELECT COUNT(*) FROM primeins.gold.dim_customer) as unique_customers,
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.customers) -
+# MAGIC     (SELECT COUNT(*) FROM primeins.gold.dim_customer) as duplicates_resolved,
+# MAGIC   ROUND(
+# MAGIC     ((SELECT COUNT(*) FROM primeins.silver.customers) -
+# MAGIC      (SELECT COUNT(*) FROM primeins.gold.dim_customer)) * 100.0 /
+# MAGIC     (SELECT COUNT(*) FROM primeins.silver.customers), 1
+# MAGIC   ) as dedup_rate_pct
 
 # COMMAND ----------
 
@@ -159,15 +147,14 @@ SELECT
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  region,
-  COUNT(*) as customer_count,
-  ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM `{CATALOG}`.gold.dim_customer), 1) as pct_of_total
-FROM `{CATALOG}`.gold.dim_customer
-GROUP BY region
-ORDER BY customer_count DESC
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   region,
+# MAGIC   COUNT(*) as customer_count,
+# MAGIC   ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM primeins.gold.dim_customer), 1) as pct_of_total
+# MAGIC FROM primeins.gold.dim_customer
+# MAGIC GROUP BY region
+# MAGIC ORDER BY customer_count DESC
 
 # COMMAND ----------
 
@@ -176,15 +163,14 @@ ORDER BY customer_count DESC
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  education,
-  COUNT(*) as count
-FROM `{CATALOG}`.gold.dim_customer
-WHERE education IS NOT NULL
-GROUP BY education
-ORDER BY count DESC
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   education,
+# MAGIC   COUNT(*) as count
+# MAGIC FROM primeins.gold.dim_customer
+# MAGIC WHERE education IS NOT NULL
+# MAGIC GROUP BY education
+# MAGIC ORDER BY count DESC
 
 # COMMAND ----------
 
@@ -198,18 +184,17 @@ ORDER BY count DESC
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  COUNT(*) as total_listings,
-  SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) as sold,
-  SUM(CASE WHEN NOT is_sold THEN 1 ELSE 0 END) as unsold,
-  ROUND(SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as sell_through_pct,
-  ROUND(AVG(CASE WHEN is_sold THEN days_listed END), 1) as avg_days_to_sell,
-  ROUND(AVG(original_selling_price), 0) as avg_price,
-  SUM(CASE WHEN NOT is_sold AND days_listed > 60 THEN 1 ELSE 0 END) as aging_over_60_days,
-  SUM(CASE WHEN NOT is_sold AND days_listed > 90 THEN 1 ELSE 0 END) as aging_over_90_days
-FROM `{CATALOG}`.gold.fact_sales
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   COUNT(*) as total_listings,
+# MAGIC   SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) as sold,
+# MAGIC   SUM(CASE WHEN NOT is_sold THEN 1 ELSE 0 END) as unsold,
+# MAGIC   ROUND(SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as sell_through_pct,
+# MAGIC   ROUND(AVG(CASE WHEN is_sold THEN days_listed END), 1) as avg_days_to_sell,
+# MAGIC   ROUND(AVG(original_selling_price), 0) as avg_price,
+# MAGIC   SUM(CASE WHEN NOT is_sold AND days_listed > 60 THEN 1 ELSE 0 END) as aging_over_60_days,
+# MAGIC   SUM(CASE WHEN NOT is_sold AND days_listed > 90 THEN 1 ELSE 0 END) as aging_over_90_days
+# MAGIC FROM primeins.gold.fact_sales
 
 # COMMAND ----------
 
@@ -218,18 +203,17 @@ FROM `{CATALOG}`.gold.fact_sales
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  model,
-  region,
-  unsold_count,
-  avg_days_listed,
-  max_days_listed,
-  ROUND(avg_price, 0) as avg_price
-FROM `{CATALOG}`.gold.mv_unsold_inventory
-ORDER BY unsold_count DESC
-LIMIT 15
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   model,
+# MAGIC   region,
+# MAGIC   unsold_count,
+# MAGIC   avg_days_listed,
+# MAGIC   max_days_listed,
+# MAGIC   ROUND(avg_price, 0) as avg_price
+# MAGIC FROM primeins.gold.mv_unsold_inventory
+# MAGIC ORDER BY unsold_count DESC
+# MAGIC LIMIT 15
 
 # COMMAND ----------
 
@@ -238,18 +222,17 @@ LIMIT 15
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  region,
-  COUNT(*) as total_listings,
-  SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) as sold,
-  SUM(CASE WHEN NOT is_sold THEN 1 ELSE 0 END) as unsold,
-  ROUND(SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as sell_through_pct,
-  ROUND(SUM(CASE WHEN is_sold THEN original_selling_price ELSE 0 END), 0) as total_revenue
-FROM `{CATALOG}`.gold.fact_sales
-GROUP BY region
-ORDER BY total_listings DESC
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   region,
+# MAGIC   COUNT(*) as total_listings,
+# MAGIC   SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) as sold,
+# MAGIC   SUM(CASE WHEN NOT is_sold THEN 1 ELSE 0 END) as unsold,
+# MAGIC   ROUND(SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as sell_through_pct,
+# MAGIC   ROUND(SUM(CASE WHEN is_sold THEN original_selling_price ELSE 0 END), 0) as total_revenue
+# MAGIC FROM primeins.gold.fact_sales
+# MAGIC GROUP BY region
+# MAGIC ORDER BY total_listings DESC
 
 # COMMAND ----------
 
@@ -263,16 +246,15 @@ ORDER BY total_listings DESC
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.dq_issues) as total_issues,
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.dq_issues WHERE severity = 'critical') as critical_issues,
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.dq_issues WHERE severity = 'medium') as medium_issues,
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.quarantine_customers) as quarantined_customers,
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.quarantine_claims) as quarantined_claims,
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.quarantine_policy) as quarantined_policies,
-  (SELECT COUNT(*) FROM `{CATALOG}`.silver.quarantine_sales) as quarantined_sales
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.dq_issues) as total_issues,
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.dq_issues WHERE severity = 'critical') as critical_issues,
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.dq_issues WHERE severity = 'medium') as medium_issues,
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.quarantine_customers) as quarantined_customers,
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.quarantine_claims) as quarantined_claims,
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.quarantine_policy) as quarantined_policies,
+# MAGIC   (SELECT COUNT(*) FROM primeins.silver.quarantine_sales) as quarantined_sales
 
 # COMMAND ----------
 
@@ -281,25 +263,24 @@ SELECT
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  d.table_name,
-  d.rule_name,
-  d.severity,
-  d.affected_records,
-  ROUND(d.affected_ratio * 100, 1) as affected_pct,
-  e.what_was_found
-FROM `{CATALOG}`.silver.dq_issues d
-LEFT JOIN `{CATALOG}`.gold.dq_explanation_report e
-  ON d.table_name = e.table_name AND d.rule_name = e.rule_name
-ORDER BY
-  CASE d.severity
-    WHEN 'critical' THEN 1
-    WHEN 'high' THEN 2
-    WHEN 'medium' THEN 3
-    WHEN 'low' THEN 4
-  END
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   d.table_name,
+# MAGIC   d.rule_name,
+# MAGIC   d.severity,
+# MAGIC   d.affected_records,
+# MAGIC   ROUND(d.affected_ratio * 100, 1) as affected_pct,
+# MAGIC   e.what_was_found
+# MAGIC FROM primeins.silver.dq_issues d
+# MAGIC LEFT JOIN primeins.gold.dq_explanation_report e
+# MAGIC   ON d.table_name = e.table_name AND d.rule_name = e.rule_name
+# MAGIC ORDER BY
+# MAGIC   CASE d.severity
+# MAGIC     WHEN 'critical' THEN 1
+# MAGIC     WHEN 'high' THEN 2
+# MAGIC     WHEN 'medium' THEN 3
+# MAGIC     WHEN 'low' THEN 4
+# MAGIC   END
 
 # COMMAND ----------
 
@@ -313,18 +294,17 @@ ORDER BY
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  priority,
-  COUNT(*) as flagged_claims,
-  ROUND(AVG(anomaly_score), 1) as avg_score,
-  ROUND(AVG(total_claim_amount), 2) as avg_claim_amount,
-  SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) as briefs_generated,
-  SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as briefs_failed
-FROM `{CATALOG}`.gold.claim_anomaly_explanations
-GROUP BY priority
-ORDER BY priority
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   priority,
+# MAGIC   COUNT(*) as flagged_claims,
+# MAGIC   ROUND(AVG(anomaly_score), 1) as avg_score,
+# MAGIC   ROUND(AVG(total_claim_amount), 2) as avg_claim_amount,
+# MAGIC   SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) as briefs_generated,
+# MAGIC   SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as briefs_failed
+# MAGIC FROM primeins.gold.claim_anomaly_explanations
+# MAGIC GROUP BY priority
+# MAGIC ORDER BY priority
 
 # COMMAND ----------
 
@@ -333,20 +313,19 @@ ORDER BY priority
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  claim_id,
-  anomaly_score,
-  priority,
-  ROUND(total_claim_amount, 2) as total_amount,
-  incident_severity,
-  incident_type,
-  triggered_rules,
-  LEFT(what_is_suspicious, 200) as suspicious_summary
-FROM `{CATALOG}`.gold.claim_anomaly_explanations
-ORDER BY anomaly_score DESC
-LIMIT 10
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   claim_id,
+# MAGIC   anomaly_score,
+# MAGIC   priority,
+# MAGIC   ROUND(total_claim_amount, 2) as total_amount,
+# MAGIC   incident_severity,
+# MAGIC   incident_type,
+# MAGIC   triggered_rules,
+# MAGIC   LEFT(what_is_suspicious, 200) as suspicious_summary
+# MAGIC FROM primeins.gold.claim_anomaly_explanations
+# MAGIC ORDER BY anomaly_score DESC
+# MAGIC LIMIT 10
 
 # COMMAND ----------
 
@@ -355,20 +334,19 @@ LIMIT 10
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  CASE
-    WHEN anomaly_score >= 80 THEN '80-100'
-    WHEN anomaly_score >= 60 THEN '60-79'
-    WHEN anomaly_score >= 40 THEN '40-59'
-    WHEN anomaly_score >= 20 THEN '20-39'
-    ELSE '0-19'
-  END as score_range,
-  COUNT(*) as claim_count
-FROM `{CATALOG}`.gold.claim_anomaly_explanations
-GROUP BY 1
-ORDER BY 1 DESC
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   CASE
+# MAGIC     WHEN anomaly_score >= 80 THEN '80-100'
+# MAGIC     WHEN anomaly_score >= 60 THEN '60-79'
+# MAGIC     WHEN anomaly_score >= 40 THEN '40-59'
+# MAGIC     WHEN anomaly_score >= 20 THEN '20-39'
+# MAGIC     ELSE '0-19'
+# MAGIC   END as score_range,
+# MAGIC   COUNT(*) as claim_count
+# MAGIC FROM primeins.gold.claim_anomaly_explanations
+# MAGIC GROUP BY 1
+# MAGIC ORDER BY 1 DESC
 
 # COMMAND ----------
 
@@ -382,18 +360,17 @@ ORDER BY 1 DESC
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  policy_csl as coverage_tier,
-  COUNT(*) as policy_count,
-  ROUND(AVG(policy_annual_premium), 2) as avg_premium,
-  ROUND(SUM(policy_annual_premium), 2) as total_premium_revenue,
-  ROUND(AVG(policy_deductible), 0) as avg_deductible,
-  SUM(CASE WHEN umbrella_limit > 0 THEN 1 ELSE 0 END) as with_umbrella
-FROM `{CATALOG}`.gold.dim_policy
-GROUP BY policy_csl
-ORDER BY policy_count DESC
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   policy_csl as coverage_tier,
+# MAGIC   COUNT(*) as policy_count,
+# MAGIC   ROUND(AVG(policy_annual_premium), 2) as avg_premium,
+# MAGIC   ROUND(SUM(policy_annual_premium), 2) as total_premium_revenue,
+# MAGIC   ROUND(AVG(policy_deductible), 0) as avg_deductible,
+# MAGIC   SUM(CASE WHEN umbrella_limit > 0 THEN 1 ELSE 0 END) as with_umbrella
+# MAGIC FROM primeins.gold.dim_policy
+# MAGIC GROUP BY policy_csl
+# MAGIC ORDER BY policy_count DESC
 
 # COMMAND ----------
 
@@ -402,17 +379,16 @@ ORDER BY policy_count DESC
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-SELECT
-  policy_state as state,
-  COUNT(*) as policies,
-  ROUND(SUM(policy_annual_premium), 2) as total_premium,
-  ROUND(AVG(policy_annual_premium), 2) as avg_premium
-FROM `{CATALOG}`.gold.dim_policy
-GROUP BY policy_state
-ORDER BY total_premium DESC
-LIMIT 10
-"""))
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   policy_state as state,
+# MAGIC   COUNT(*) as policies,
+# MAGIC   ROUND(SUM(policy_annual_premium), 2) as total_premium,
+# MAGIC   ROUND(AVG(policy_annual_premium), 2) as avg_premium
+# MAGIC FROM primeins.gold.dim_policy
+# MAGIC GROUP BY policy_state
+# MAGIC ORDER BY total_premium DESC
+# MAGIC LIMIT 10
 
 # COMMAND ----------
 
