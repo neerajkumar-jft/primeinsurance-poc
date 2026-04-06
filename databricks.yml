@@ -158,6 +158,16 @@ resources:
             notebook_path: ./notebooks/gold/06_before_after_comparison.py
             source: WORKSPACE
 
+    claims_sla_monitoring:
+      name: PrimeInsurance_Claims_SLA_Monitoring
+      tags:
+        project: primeinsurance-poc
+      tasks:
+        - task_key: sla_monitoring
+          notebook_task:
+            notebook_path: ./notebooks/gold/08_claims_sla_monitoring.py
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
