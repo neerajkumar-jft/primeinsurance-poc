@@ -178,6 +178,16 @@ resources:
             notebook_path: ./notebooks/gold/09_inventory_redistribution.py
             source: WORKSPACE
 
+    customer_risk_segmentation:
+      name: PrimeInsurance_Customer_Risk_Segmentation
+      tags:
+        project: primeinsurance-poc
+      tasks:
+        - task_key: risk_segmentation
+          notebook_task:
+            notebook_path: ./notebooks/gold/10_customer_risk_segmentation.py
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
