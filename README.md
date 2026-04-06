@@ -21,11 +21,14 @@ Unity Catalog Volumes (primeins.bronze.raw_data)
     v
 [GOLD] Star schema (4 dims + 2 facts) + 4 materialized views
     |
-    v
-[GEN AI] 4 use cases on databricks-gpt-oss-20b
-    |
-    v
-[SERVING] SQL Warehouse + Genie Space
+    ├──────────────────────────────┐
+    v                              v
+[GEN AI] 4 use cases            [VECTOR SEARCH] Alternative RAG
+  databricks-gpt-oss-20b          Databricks Vector Search
+  FAISS + sentence-transformers    databricks-bge-large-en
+    |                              |
+    v                              v
+[SERVING] SQL Warehouse + Genie Space + Dashboards
 ```
 
 Catalog: `primeins`
@@ -35,6 +38,7 @@ Schemas: `primeins.bronze`, `primeins.silver`, `primeins.gold`
 
 ```
 primeinsurance-poc/
+  databricks.yml                   # Databricks Asset Bundle (CI/CD)
   architecture.md                  # full platform design document
   README.md
   data/
@@ -49,11 +53,19 @@ primeinsurance-poc/
     gold/
       03_gold_dlt_pipeline.py           # star schema, fact tables, materialized views
       05_executive_dashboard.py         # dashboard queries for all business metrics
+      06_before_after_comparison.py     # Bronze vs Silver visual proof
+      07_regulatory_customer_report.py  # auditable customer registry for regulators
+      08_claims_sla_monitoring.py       # claims rejection patterns and fraud flags
+      09_inventory_redistribution.py    # unsold inventory cross-regional opportunities
+      10_customer_risk_segmentation.py  # customer risk tiers and profitability
     genai/
       04_uc1_dq_explanations.py         # DQ log -> plain English for compliance
       04_uc2_anomaly_engine.py          # fraud scoring + investigation briefs
       04_uc3_policy_rag.py              # RAG policy assistant (FAISS + embeddings)
       04_uc4_executive_insights.py      # KPI aggregation -> executive summaries
+      05_uc3_vector_store_setup.py      # Vector Search endpoint + index (run once)
+      05_uc3_vector_store_sync.py       # refresh policy docs + trigger index sync
+      05_uc3_vector_search_inference.py # query interface using Vector Search
   docs/
     architecture-diagram.drawio         # main architecture diagram
     architecture-complete.drawio        # 4-page: data flow, components, DQ, Gen AI
@@ -67,9 +79,9 @@ primeinsurance-poc/
       gold_issues_and_resolutions.md    # issues encountered during Gold build
 ```
 
-## Pipeline
+## Pipelines and jobs
 
-Three DLT pipelines run in sequence:
+### DLT Pipelines
 
 | Pipeline | Tables created | Notes |
 |----------|---------------|-------|
@@ -77,7 +89,22 @@ Three DLT pipelines run in sequence:
 | `primeins_silver_pipeline` | 5 clean + 5 quarantine + dq_issues | DLT Expectations, harmonization, quarantine |
 | `primeins_gold_pipeline` | 4 dims + 2 facts + 4 materialized views | Star schema, auto-refreshing aggregations |
 
-Gen AI notebooks run as standalone jobs after the pipeline completes.
+### Workflow Jobs
+
+| Job | Tasks | Purpose |
+|-----|-------|---------|
+| `PrimeInsurance_End_to_End_Pipeline` | Bronze -> Silver -> Gold -> UC1/UC2/UC3/UC4 | Full pipeline, 7 tasks with dependencies |
+| `PrimeInsurance_Vector_Search_Pipeline` | Gold -> Vector Store Sync -> Inference | Alternative RAG using Databricks Vector Search |
+| `PrimeInsurance_Vector_Store_Setup` | One-time setup | Creates Vector Search endpoint + Delta Sync index |
+
+### CI/CD
+
+Databricks Asset Bundle (`databricks.yml`) with dev/prod targets. Deploy with:
+```bash
+databricks bundle deploy --target dev    # deploy to current workspace
+databricks bundle deploy --target prod   # deploy to commercial workspace
+databricks bundle run primeins_end_to_end --target dev  # trigger full pipeline
+```
 
 ## Gold layer tables
 
@@ -93,9 +120,11 @@ Gen AI notebooks run as standalone jobs after the pipeline completes.
 | mv_claims_by_severity | Materialized View | Claim stats by severity level |
 | mv_unsold_inventory | Materialized View | Unsold cars by model and region |
 | mv_claims_by_region | Materialized View | Claim volume and rejection by region |
+| dim_policy_documents | Vector Search | Policy text documents for RAG embedding |
 | dq_explanation_report | AI Output | Plain English DQ explanations (UC1) |
 | claim_anomaly_explanations | AI Output | Fraud investigation briefs (UC2) |
-| rag_query_history | AI Output | Policy Q&A with citations (UC3) |
+| rag_query_history | AI Output | Policy Q&A with citations (UC3 FAISS) |
+| rag_query_history_vs | AI Output | Policy Q&A with citations (UC3 Vector Search) |
 | ai_business_insights | AI Output | Executive summaries by domain (UC4) |
 
 ## Gen AI use cases
@@ -106,8 +135,29 @@ All four use databricks-gpt-oss-20b via OpenAI-compatible API. Shared infrastruc
 |----|------|-------|--------|-------------|
 | 1 | DQ Explainer | silver.dq_issues | gold.dq_explanation_report | Translates 7 technical DQ issues to plain English |
 | 2 | Claims Anomaly | silver.claims | gold.claim_anomaly_explanations | 5 fraud rules score 1,000 claims, LLM writes briefs for 128 flagged |
-| 3 | RAG Policy Assistant | gold.dim_policy | gold.rag_query_history | FAISS + sentence-transformers, answers with cited policy numbers |
+| 3a | RAG Policy (FAISS) | gold.dim_policy | gold.rag_query_history | Local embeddings + FAISS, answers with cited policy numbers |
+| 3b | RAG Policy (Vector Search) | gold.dim_policy_documents | gold.rag_query_history_vs | Databricks Vector Search, persistent index, auto-sync |
 | 4 | Executive Insights | All Gold tables | gold.ai_business_insights | Aggregated KPIs to executive summaries for 3 domains |
+
+### UC3: Two approaches compared
+
+| Feature | FAISS (04_uc3) | Databricks Vector Search (05_uc3) |
+|---------|---------------|----------------------------------|
+| Index persistence | In-memory, lost when notebook ends | Persistent, managed service |
+| Index rebuild | Full rebuild every run | Auto-sync via Delta Change Data Feed |
+| Embedding | Local (sentence-transformers, all-MiniLM-L6-v2) | Managed (databricks-bge-large-en) |
+| Concurrent users | Not supported | Built-in |
+| Scale | Fine for 1K policies | Handles millions |
+| Dependencies | pip install sentence-transformers faiss-cpu | None (native Databricks) |
+
+## Business reports
+
+| Notebook | Business failure | What it provides |
+|----------|-----------------|-----------------|
+| 07_regulatory_customer_report | Regulatory pressure | Auditable customer count, dedup methodology, readiness checklist |
+| 08_claims_sla_monitoring | Claims backlog | Rejection patterns by region/severity/type, fraud flags |
+| 09_inventory_redistribution | Revenue leakage | Models stuck in one region selling fast in another |
+| 10_customer_risk_segmentation | All three | Risk tiers, repeat claimants, profitability analysis |
 
 ## Data quality
 
@@ -117,7 +167,14 @@ All four use databricks-gpt-oss-20b via OpenAI-compatible API. Shared infrastruc
 | Silver | DLT Expectations (expect_or_drop, expect_or_fail, expect) | Route to quarantine table + log to dq_issues |
 | Gold | Referential integrity between facts and dimensions | Block promotion |
 
+## Dashboards
+
+| Dashboard | Tabs | Purpose |
+|-----------|------|---------|
+| PrimeInsurance Dashboard | 1 | Executive KPIs, claims, customers, inventory |
+| PrimeInsurance Business Intelligence | 4 | Customer Registry, Claims Performance, Inventory & Revenue, Customer Risk |
+
 ## Known limitations
 
-- Claim date fields (incident_date, claim_logged_on, claim_processed_on) are corrupted at source. Only time portions survived. Processing time in days cannot be calculated from this data. Synthetic processing days are generated in UC4 only.
-- UC3 FAISS index rebuilds from scratch every run and lives in memory only. Not production-ready at scale.
+- Claim date fields (incident_date, claim_logged_on, claim_processed_on) are corrupted at source. Only time portions survived. Processing time in days cannot be calculated. Synthetic processing days are generated in UC4 only.
+- UC3 FAISS index rebuilds from scratch every run and lives in memory only. The Vector Search alternative (05_uc3) solves this with a persistent, auto-syncing index.
