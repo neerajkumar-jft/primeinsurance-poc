@@ -126,6 +126,38 @@ resources:
               catalog: ${var.catalog}
             source: WORKSPACE
 
+    # ── Standalone report & analysis notebooks ──
+
+    regulatory_customer_report:
+      name: PrimeInsurance_Regulatory_Report
+      tags:
+        project: primeinsurance-poc
+      tasks:
+        - task_key: regulatory_report
+          notebook_task:
+            notebook_path: ./notebooks/gold/07_regulatory_customer_report.py
+            source: WORKSPACE
+
+    executive_dashboard:
+      name: PrimeInsurance_Executive_Dashboard
+      tags:
+        project: primeinsurance-poc
+      tasks:
+        - task_key: dashboard
+          notebook_task:
+            notebook_path: ./notebooks/gold/05_executive_dashboard.py
+            source: WORKSPACE
+
+    before_after_comparison:
+      name: PrimeInsurance_Before_After
+      tags:
+        project: primeinsurance-poc
+      tasks:
+        - task_key: comparison
+          notebook_task:
+            notebook_path: ./notebooks/gold/06_before_after_comparison.py
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
