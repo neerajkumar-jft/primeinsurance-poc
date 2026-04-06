@@ -114,20 +114,17 @@ else:
 
 # Wait for endpoint to be ready
 for i in range(30):
-    ep = w.vector_search_endpoints.get_endpoint(VECTOR_SEARCH_ENDPOINT)
     try:
-        if hasattr(ep, 'endpoint_status') and ep.endpoint_status:
-            state = ep.endpoint_status
-            if hasattr(state, 'state'):
-                status = state.state.value if hasattr(state.state, 'value') else str(state.state)
-            else:
-                status = str(state)
-        else:
-            status = "PROVISIONING"
+        ep = w.vector_search_endpoints.get_endpoint(VECTOR_SEARCH_ENDPOINT)
+        # Extract status safely regardless of SDK version
+        status = str(getattr(getattr(getattr(ep, 'endpoint_status', None), 'state', None), 'value', None)
+                     or getattr(getattr(ep, 'endpoint_status', None), 'state', None)
+                     or getattr(ep, 'endpoint_status', None)
+                     or "PROVISIONING")
     except Exception:
-        status = "UNKNOWN"
+        status = "PROVISIONING"
 
-    if status in ("ONLINE", "READY"):
+    if "ONLINE" in status.upper() or "READY" in status.upper():
         print(f"Endpoint is {status}")
         break
     print(f"  Waiting for endpoint... ({status})")
