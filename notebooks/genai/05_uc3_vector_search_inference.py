@@ -13,7 +13,7 @@
 
 # COMMAND ----------
 
-%pip install openai pydantic --quiet
+# MAGIC %pip install openai pydantic --quiet
 
 # COMMAND ----------
 
@@ -21,11 +21,17 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 4
 import json
 import re
 from datetime import datetime
 from openai import OpenAI
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
+# Handle both pydantic v1 and v2
+try:
+    from pydantic import field_validator
+except ImportError:
+    from pydantic import validator as field_validator
 from databricks.sdk import WorkspaceClient
 
 dbutils.widgets.text("catalog", "primeins")
@@ -55,6 +61,7 @@ print(f"Output: {OUTPUT_TABLE}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 5
 # ============================================================
 # RESPONSE PARSER & GUARDRAILS
 # ============================================================
@@ -87,7 +94,7 @@ class RAGAnswer(BaseModel):
     cited_policies: str = Field(min_length=2)
     confidence_explanation: str = Field(min_length=10)
 
-    @field_validator('*', mode='before')
+    @field_validator('answer', 'cited_policies', 'confidence_explanation', pre=True)
     @classmethod
     def clean_input(cls, v):
         if isinstance(v, str):
