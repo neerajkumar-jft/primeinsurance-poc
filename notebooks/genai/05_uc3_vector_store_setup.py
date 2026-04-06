@@ -95,7 +95,9 @@ print("Change Data Feed enabled")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 7
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.vectorsearch import EndpointType
 import time
 
 w = WorkspaceClient()
@@ -108,7 +110,7 @@ else:
     print(f"Creating endpoint '{VECTOR_SEARCH_ENDPOINT}'...")
     w.vector_search_endpoints.create_endpoint(
         name=VECTOR_SEARCH_ENDPOINT,
-        endpoint_type="STANDARD"
+        endpoint_type=EndpointType.STANDARD
     )
     print(f"Endpoint '{VECTOR_SEARCH_ENDPOINT}' creation initiated")
 
@@ -116,11 +118,11 @@ else:
 for i in range(30):
     try:
         ep = w.vector_search_endpoints.get_endpoint(VECTOR_SEARCH_ENDPOINT)
-        # Extract status safely regardless of SDK version
-        status = str(getattr(getattr(getattr(ep, 'endpoint_status', None), 'state', None), 'value', None)
-                     or getattr(getattr(ep, 'endpoint_status', None), 'state', None)
-                     or getattr(ep, 'endpoint_status', None)
-                     or "PROVISIONING")
+        # Extract state value from the enum
+        if hasattr(ep, 'endpoint_status') and ep.endpoint_status and hasattr(ep.endpoint_status, 'state'):
+            status = str(ep.endpoint_status.state.value) if hasattr(ep.endpoint_status.state, 'value') else str(ep.endpoint_status.state)
+        else:
+            status = "PROVISIONING"
     except Exception:
         status = "PROVISIONING"
 
@@ -137,6 +139,9 @@ for i in range(30):
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 9
+from databricks.sdk.service.vectorsearch import DeltaSyncVectorIndexSpecRequest, EmbeddingSourceColumn, PipelineType, VectorIndexType
+
 existing_indexes = []
 try:
     idx_list = w.vector_search_indexes.list_indexes(VECTOR_SEARCH_ENDPOINT)
@@ -152,17 +157,17 @@ else:
         name=INDEX_NAME,
         endpoint_name=VECTOR_SEARCH_ENDPOINT,
         primary_key="policy_number",
-        index_type="DELTA_SYNC",
-        delta_sync_index_spec={
-            "source_table": f"{CATALOG}.gold.dim_policy_documents",
-            "pipeline_type": "TRIGGERED",
-            "embedding_source_columns": [
-                {
-                    "name": "policy_text",
-                    "embedding_model_endpoint_name": EMBEDDING_MODEL
-                }
+        index_type=VectorIndexType.DELTA_SYNC,
+        delta_sync_index_spec=DeltaSyncVectorIndexSpecRequest(
+            source_table=f"{CATALOG}.gold.dim_policy_documents",
+            pipeline_type=PipelineType.TRIGGERED,
+            embedding_source_columns=[
+                EmbeddingSourceColumn(
+                    name="policy_text",
+                    embedding_model_endpoint_name=EMBEDDING_MODEL
+                )
             ]
-        }
+        )
     )
     print(f"Index '{INDEX_NAME}' created and syncing...")
 
@@ -189,19 +194,27 @@ for i in range(60):
 
 # COMMAND ----------
 
-results = w.vector_search_indexes.query_index(
-    index_name=INDEX_NAME,
-    columns=["policy_number", "policy_text", "policy_csl", "policy_deductible"],
-    query_text="policies with umbrella coverage",
-    num_results=3
-)
+# DBTITLE 1,Cell 11
+# Check if index is ready before querying
+idx = w.vector_search_indexes.get_index(INDEX_NAME)
+if not idx.status.ready:
+    print(f"Index '{INDEX_NAME}' is not ready yet.")
+    print(f"Status: {idx.status.message}")
+    print("\nWait for the index to finish syncing, then run this cell again.")
+else:
+    results = w.vector_search_indexes.query_index(
+        index_name=INDEX_NAME,
+        columns=["policy_number", "policy_text", "policy_csl", "policy_deductible"],
+        query_text="policies with umbrella coverage",
+        num_results=3
+    )
 
-print("Test query: 'policies with umbrella coverage'")
-print(f"Results: {len(results.result.data_array)} rows\n")
-for row in results.result.data_array:
-    print(f"  Policy {row[0]} | CSL: {row[2]} | Deductible: ${row[3]}")
-    print(f"  {row[1][:100]}...")
-    print()
+    print("Test query: 'policies with umbrella coverage'")
+    print(f"Results: {len(results.result.data_array)} rows\n")
+    for row in results.result.data_array:
+        print(f"  Policy {row[0]} | CSL: {row[2]} | Deductible: ${row[3]}")
+        print(f"  {row[1][:100]}...")
+        print()
 
 # COMMAND ----------
 
