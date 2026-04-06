@@ -1,0 +1,151 @@
+# Databricks Asset Bundle configuration for PrimeInsurance Data Intelligence Platform
+#
+# Deploy:   databricks bundle deploy --target dev
+# Run:      databricks bundle run primeins_end_to_end --target dev
+# Destroy:  databricks bundle destroy --target dev
+#
+# To migrate to a new workspace (commercial account):
+#   1. Update the host and catalog in the prod target
+#   2. Run: databricks bundle deploy --target prod
+#   3. Everything deploys automatically — pipelines, jobs, permissions
+
+bundle:
+  name: primeinsurance-poc
+
+variables:
+  catalog:
+    description: Unity Catalog name for all tables
+    default: primeins
+  warehouse_id:
+    description: SQL Warehouse ID for serving
+    default: 0506e893342cdfbe
+
+# ============================================================
+# DLT PIPELINES
+# ============================================================
+
+resources:
+  pipelines:
+    bronze_pipeline:
+      name: primeins_bronze_pipeline
+      catalog: ${var.catalog}
+      target: bronze
+      channel: CURRENT
+      development: true
+      continuous: false
+      libraries:
+        - notebook:
+            path: ./notebooks/bronze/01_bronze_ingestion_dlt.py
+
+    silver_pipeline:
+      name: primeins_silver_pipeline
+      catalog: ${var.catalog}
+      target: silver
+      channel: CURRENT
+      development: true
+      continuous: false
+      libraries:
+        - notebook:
+            path: ./notebooks/silver/02_silver_dlt_pipeline.py
+
+    gold_pipeline:
+      name: primeins_gold_pipeline
+      catalog: ${var.catalog}
+      target: gold
+      channel: CURRENT
+      development: true
+      continuous: false
+      libraries:
+        - notebook:
+            path: ./notebooks/gold/03_gold_dlt_pipeline.py
+
+  # ============================================================
+  # WORKFLOW JOBS
+  # ============================================================
+
+  jobs:
+    primeins_end_to_end:
+      name: PrimeInsurance_End_to_End_Pipeline
+      tags:
+        project: primeinsurance-poc
+        team: jellyfish-technologies
+      tasks:
+        - task_key: bronze_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.bronze_pipeline.id}
+            full_refresh: false
+
+        - task_key: silver_pipeline
+          depends_on:
+            - task_key: bronze_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_pipeline.id}
+            full_refresh: false
+
+        - task_key: gold_pipeline
+          depends_on:
+            - task_key: silver_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.gold_pipeline.id}
+            full_refresh: false
+
+        - task_key: uc1_dq_explainer
+          depends_on:
+            - task_key: silver_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/genai/04_uc1_dq_explanations.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
+        - task_key: uc2_anomaly_engine
+          depends_on:
+            - task_key: silver_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/genai/04_uc2_anomaly_engine.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
+        - task_key: uc3_rag_policy
+          depends_on:
+            - task_key: gold_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/genai/04_uc3_policy_rag.py
+            base_parameters:
+              catalog: ${var.catalog}
+              run_test_queries: "false"
+            source: WORKSPACE
+
+        - task_key: uc4_executive_insights
+          depends_on:
+            - task_key: gold_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/genai/04_uc4_executive_insights.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
+# ============================================================
+# DEPLOYMENT TARGETS
+# ============================================================
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-095b6263-cfd6.cloud.databricks.com
+    variables:
+      catalog: primeins
+      warehouse_id: 0506e893342cdfbe
+
+  prod:
+    mode: production
+    workspace:
+      host: ${DATABRICKS_PROD_HOST}
+    variables:
+      catalog: primeins_prod
+      warehouse_id: ${DATABRICKS_PROD_WAREHOUSE}
+    run_as:
+      service_principal_name: ${DATABRICKS_PROD_SP}
