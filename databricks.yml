@@ -126,6 +126,15 @@ resources:
               catalog: ${var.catalog}
             source: WORKSPACE
 
+        - task_key: vector_store_sync
+          depends_on:
+            - task_key: gold_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/genai/05_uc3_vector_store_sync.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
     # ── Standalone report & analysis notebooks ──
 
     regulatory_customer_report:
@@ -192,6 +201,7 @@ resources:
       name: PrimeInsurance_Vector_Store_Setup
       tags:
         project: primeinsurance-poc
+        run: once
       tasks:
         - task_key: vs_setup
           notebook_task:
@@ -200,12 +210,29 @@ resources:
               catalog: ${var.catalog}
             source: WORKSPACE
 
-    vector_search_inference:
-      name: PrimeInsurance_Vector_Search_Inference
+    vector_search_pipeline:
+      name: PrimeInsurance_Vector_Search_Pipeline
       tags:
         project: primeinsurance-poc
+        approach: vector-search
       tasks:
-        - task_key: vs_inference
+        - task_key: gold_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.gold_pipeline.id}
+            full_refresh: false
+
+        - task_key: vector_store_sync
+          depends_on:
+            - task_key: gold_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/genai/05_uc3_vector_store_sync.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
+        - task_key: vector_search_inference
+          depends_on:
+            - task_key: vector_store_sync
           notebook_task:
             notebook_path: ./notebooks/genai/05_uc3_vector_search_inference.py
             base_parameters:

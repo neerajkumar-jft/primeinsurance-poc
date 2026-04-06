@@ -1,20 +1,14 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # UC3 Alternative: Persistent Vector Store Setup
+# MAGIC # UC3 Alternative: Vector Store Setup (Run Once)
 # MAGIC
-# MAGIC This notebook creates a persistent, auto-syncing vector store using
-# MAGIC Databricks Vector Search. Unlike the FAISS approach (which rebuilds
-# MAGIC in memory every run), this index:
-# MAGIC - Persists across sessions
-# MAGIC - Auto-syncs when gold.dim_policy changes (Delta Change Data Feed)
-# MAGIC - Supports concurrent users
-# MAGIC - Uses Databricks managed embeddings (databricks-bge-large-en)
+# MAGIC One-time setup for the persistent Vector Search infrastructure.
+# MAGIC Creates the endpoint and Delta Sync index. Run this manually once.
+# MAGIC After that, the sync notebook handles data refreshes as part of the pipeline.
 # MAGIC
-# MAGIC Run this once to set up the infrastructure. The index stays alive
-# MAGIC and syncs automatically after that.
-# MAGIC
-# MAGIC **Part 1 of 2**: This notebook sets up the vector store.
-# MAGIC **Part 2**: 05_uc3_vector_search_inference.py handles user queries.
+# MAGIC **This notebook**: Creates endpoint + index (one-time)
+# MAGIC **05_uc3_vector_store_sync.py**: Refreshes data + triggers sync (pipeline job)
+# MAGIC **05_uc3_vector_search_inference.py**: Query interface
 
 # COMMAND ----------
 
@@ -30,30 +24,30 @@ spark.sql(f"USE CATALOG `{CATALOG}`")
 
 VECTOR_SEARCH_ENDPOINT = "primeins_policy_vs"
 SOURCE_TABLE = f"{CATALOG}.gold.dim_policy"
+DOCS_TABLE = f"{CATALOG}.gold.dim_policy_documents"
 INDEX_NAME = f"{CATALOG}.gold.dim_policy_vs_index"
 EMBEDDING_MODEL = "databricks-bge-large-en"
 
 print(f"Catalog: {CATALOG}")
 print(f"Endpoint: {VECTOR_SEARCH_ENDPOINT}")
 print(f"Source: {SOURCE_TABLE}")
+print(f"Docs table: {DOCS_TABLE}")
 print(f"Index: {INDEX_NAME}")
 print(f"Embedding model: {EMBEDDING_MODEL}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 1: Create a text column for embedding
+# MAGIC ## Step 1: Create policy documents table
 # MAGIC
-# MAGIC Vector Search needs a text column to embed. We create a view that
-# MAGIC converts each policy row into a natural language document, same
-# MAGIC conversion logic as the FAISS notebook but stored as a Delta table
-# MAGIC so the index can sync from it.
+# MAGIC Converts each policy row into a natural language document.
+# MAGIC This table is the source for the Vector Search index.
+# MAGIC Change Data Feed is enabled so the index can sync incrementally.
 
 # COMMAND ----------
 
-# Create a policy documents table with the text representation
 spark.sql(f"""
-CREATE OR REPLACE TABLE {CATALOG}.gold.dim_policy_documents AS
+CREATE OR REPLACE TABLE {DOCS_TABLE} AS
 SELECT
   CAST(policy_number AS STRING) as policy_number,
   policy_bind_date,
@@ -88,11 +82,10 @@ SELECT
 FROM {SOURCE_TABLE}
 """)
 
-doc_count = spark.sql(f"SELECT COUNT(*) FROM {CATALOG}.gold.dim_policy_documents").collect()[0][0]
+doc_count = spark.sql(f"SELECT COUNT(*) FROM {DOCS_TABLE}").collect()[0][0]
 print(f"Created dim_policy_documents with {doc_count} rows")
 
-# Enable Change Data Feed so Vector Search can sync incrementally
-spark.sql(f"ALTER TABLE {CATALOG}.gold.dim_policy_documents SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+spark.sql(f"ALTER TABLE {DOCS_TABLE} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
 print("Change Data Feed enabled")
 
 # COMMAND ----------
@@ -103,10 +96,10 @@ print("Change Data Feed enabled")
 # COMMAND ----------
 
 from databricks.sdk import WorkspaceClient
+import time
 
 w = WorkspaceClient()
 
-# Check if endpoint exists
 existing_endpoints = [ep.name for ep in w.vector_search_endpoints.list_endpoints()]
 
 if VECTOR_SEARCH_ENDPOINT in existing_endpoints:
@@ -117,14 +110,12 @@ else:
         name=VECTOR_SEARCH_ENDPOINT,
         endpoint_type="STANDARD"
     )
-    print(f"Endpoint '{VECTOR_SEARCH_ENDPOINT}' created")
+    print(f"Endpoint '{VECTOR_SEARCH_ENDPOINT}' creation initiated")
 
 # Wait for endpoint to be ready
-import time
 for i in range(30):
     ep = w.vector_search_endpoints.get_endpoint(VECTOR_SEARCH_ENDPOINT)
     try:
-        # Handle both SDK versions: object with .value or plain string
         if hasattr(ep, 'endpoint_status') and ep.endpoint_status:
             state = ep.endpoint_status
             if hasattr(state, 'state'):
@@ -145,14 +136,10 @@ for i in range(30):
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 3: Create Delta Sync Vector Search Index
-# MAGIC
-# MAGIC This index auto-syncs with the source table. When dim_policy_documents
-# MAGIC changes (new policies, updated coverage), the index updates automatically.
+# MAGIC ## Step 3: Create Delta Sync index
 
 # COMMAND ----------
 
-# Check if index exists
 existing_indexes = []
 try:
     idx_list = w.vector_search_indexes.list_indexes(VECTOR_SEARCH_ENDPOINT)
@@ -186,12 +173,10 @@ else:
 for i in range(60):
     try:
         idx = w.vector_search_indexes.get_index(INDEX_NAME)
-        # Handle both SDK versions
         try:
             is_ready = idx.status.ready if hasattr(idx.status, 'ready') else False
         except Exception:
             is_ready = False
-
         if is_ready:
             print(f"Index is READY")
             break
@@ -203,11 +188,10 @@ for i in range(60):
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 4: Verify the index
+# MAGIC ## Step 4: Verify
 
 # COMMAND ----------
 
-# Test a simple similarity search
 results = w.vector_search_indexes.query_index(
     index_name=INDEX_NAME,
     columns=["policy_number", "policy_text", "policy_csl", "policy_deductible"],
@@ -227,15 +211,14 @@ for row in results.result.data_array:
 # MAGIC %md
 # MAGIC ## Setup complete
 # MAGIC
-# MAGIC The vector store is now persistent and auto-syncing:
-# MAGIC
 # MAGIC | Component | Value |
 # MAGIC |-----------|-------|
 # MAGIC | Endpoint | `primeins_policy_vs` |
 # MAGIC | Index | `primeins.gold.dim_policy_vs_index` |
 # MAGIC | Source table | `primeins.gold.dim_policy_documents` |
 # MAGIC | Embedding model | `databricks-bge-large-en` (managed) |
-# MAGIC | Sync mode | Delta Sync (auto on Change Data Feed) |
-# MAGIC | Policies indexed | Same as dim_policy count |
+# MAGIC | Sync mode | Delta Sync (triggered by sync notebook) |
 # MAGIC
-# MAGIC Run `05_uc3_vector_search_inference.py` for the query interface.
+# MAGIC Next steps:
+# MAGIC - **Pipeline sync**: `05_uc3_vector_store_sync.py` refreshes data after each Gold pipeline run
+# MAGIC - **Query interface**: `05_uc3_vector_search_inference.py` for user queries
