@@ -82,7 +82,7 @@
 
 # MAGIC %sql
 # MAGIC SELECT
-# MAGIC   coverage_tier,
+# MAGIC   policy_csl as coverage_tier,
 # MAGIC   total_claims,
 # MAGIC   rejected_claims,
 # MAGIC   ROUND(rejection_rate_pct, 1) as rejection_rate_pct,
