@@ -188,6 +188,30 @@ resources:
             notebook_path: ./notebooks/gold/10_customer_risk_segmentation.py
             source: WORKSPACE
 
+    vector_store_setup:
+      name: PrimeInsurance_Vector_Store_Setup
+      tags:
+        project: primeinsurance-poc
+      tasks:
+        - task_key: vs_setup
+          notebook_task:
+            notebook_path: ./notebooks/genai/05_uc3_vector_store_setup.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
+    vector_search_inference:
+      name: PrimeInsurance_Vector_Search_Inference
+      tags:
+        project: primeinsurance-poc
+      tasks:
+        - task_key: vs_inference
+          notebook_task:
+            notebook_path: ./notebooks/genai/05_uc3_vector_search_inference.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
