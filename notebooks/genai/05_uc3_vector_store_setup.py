@@ -123,9 +123,21 @@ else:
 import time
 for i in range(30):
     ep = w.vector_search_endpoints.get_endpoint(VECTOR_SEARCH_ENDPOINT)
-    status = ep.endpoint_status.state.value if ep.endpoint_status else "UNKNOWN"
-    if status == "ONLINE":
-        print(f"Endpoint is ONLINE")
+    try:
+        # Handle both SDK versions: object with .value or plain string
+        if hasattr(ep, 'endpoint_status') and ep.endpoint_status:
+            state = ep.endpoint_status
+            if hasattr(state, 'state'):
+                status = state.state.value if hasattr(state.state, 'value') else str(state.state)
+            else:
+                status = str(state)
+        else:
+            status = "PROVISIONING"
+    except Exception:
+        status = "UNKNOWN"
+
+    if status in ("ONLINE", "READY"):
+        print(f"Endpoint is {status}")
         break
     print(f"  Waiting for endpoint... ({status})")
     time.sleep(10)
@@ -174,8 +186,13 @@ else:
 for i in range(60):
     try:
         idx = w.vector_search_indexes.get_index(INDEX_NAME)
-        status = idx.status.ready
-        if status:
+        # Handle both SDK versions
+        try:
+            is_ready = idx.status.ready if hasattr(idx.status, 'ready') else False
+        except Exception:
+            is_ready = False
+
+        if is_ready:
             print(f"Index is READY")
             break
         print(f"  Syncing... ({i*10}s)")
