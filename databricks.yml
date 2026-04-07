@@ -271,6 +271,23 @@ resources:
               min_records_floor: "10"
             source: WORKSPACE
 
+    quality_volume_cap_check:
+      name: PrimeInsurance_Quality_Volume_Cap_Check
+      tags:
+        project: primeinsurance-poc
+        phase: "1.5"
+      tasks:
+        - task_key: volume_cap_check
+          notebook_task:
+            notebook_path: ./notebooks/quality/31_dq_volume_cap_check.py
+            base_parameters:
+              catalog: ${var.catalog}
+              default_threshold_pct: "5.0"
+              per_table_thresholds: "sales=70.0"
+              exclude_tables: ""
+              halt_on_breach: "true"
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
