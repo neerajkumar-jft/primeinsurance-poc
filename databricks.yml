@@ -301,6 +301,21 @@ resources:
               catalog: ${var.catalog}
             source: WORKSPACE
 
+    quality_steward_review:
+      name: PrimeInsurance_Quality_Steward_Review
+      tags:
+        project: primeinsurance-poc
+        phase: "1.5"
+        run: manual
+      tasks:
+        - task_key: steward_review
+          notebook_task:
+            notebook_path: ./notebooks/quality/34_dq_steward_review.py
+            base_parameters:
+              catalog: ${var.catalog}
+              steward_email: ""
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
