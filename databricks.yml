@@ -316,6 +316,23 @@ resources:
               steward_email: ""
             source: WORKSPACE
 
+    quality_retention_archiver:
+      name: PrimeInsurance_Quality_Retention_Archiver
+      tags:
+        project: primeinsurance-poc
+        phase: "1.5"
+      tasks:
+        - task_key: retention_archiver
+          notebook_task:
+            notebook_path: ./notebooks/quality/32_dq_retention_archiver.py
+            base_parameters:
+              catalog: ${var.catalog}
+              retention_days: "90"
+              mode: "flag_only"
+              dry_run: "false"
+              confirm_delete: ""
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
