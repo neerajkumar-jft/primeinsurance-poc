@@ -333,6 +333,22 @@ resources:
               confirm_delete: ""
             source: WORKSPACE
 
+    quality_source_owner_digest:
+      name: PrimeInsurance_Quality_Source_Owner_Digest
+      tags:
+        project: primeinsurance-poc
+        phase: "1.5"
+      tasks:
+        - task_key: source_owner_digest
+          notebook_task:
+            notebook_path: ./notebooks/quality/33_dq_source_owner_digest.py
+            base_parameters:
+              catalog: ${var.catalog}
+              week_starting: ""
+              slack_webhook: ""
+              seed_owners: "auto"
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
