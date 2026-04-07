@@ -288,6 +288,19 @@ resources:
               halt_on_breach: "true"
             source: WORKSPACE
 
+    quality_metrics_rollup:
+      name: PrimeInsurance_Quality_Metrics_Rollup
+      tags:
+        project: primeinsurance-poc
+        phase: "1.5"
+      tasks:
+        - task_key: metrics_rollup
+          notebook_task:
+            notebook_path: ./notebooks/quality/37_dq_metrics_rollup.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
