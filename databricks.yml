@@ -239,6 +239,38 @@ resources:
               catalog: ${var.catalog}
             source: WORKSPACE
 
+    # ── Phase 1.5 quality resolution loop ──
+
+    quality_resolution_logger_setup:
+      name: PrimeInsurance_Quality_Resolution_Logger_Setup
+      tags:
+        project: primeinsurance-poc
+        phase: "1.5"
+        run: once
+      tasks:
+        - task_key: setup
+          notebook_task:
+            notebook_path: ./notebooks/quality/36_dq_resolution_logger.py
+            base_parameters:
+              catalog: ${var.catalog}
+            source: WORKSPACE
+
+    quality_trend_alerting:
+      name: PrimeInsurance_Quality_Trend_Alerting
+      tags:
+        project: primeinsurance-poc
+        phase: "1.5"
+      tasks:
+        - task_key: trend_alerting
+          notebook_task:
+            notebook_path: ./notebooks/quality/30_dq_trend_alerting.py
+            base_parameters:
+              catalog: ${var.catalog}
+              threshold: "2.0"
+              comparison_lookback_days: "7"
+              min_records_floor: "10"
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================

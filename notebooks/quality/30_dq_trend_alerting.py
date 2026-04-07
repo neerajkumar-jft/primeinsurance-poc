@@ -116,10 +116,12 @@ CREATE TABLE IF NOT EXISTS {ALERTS_TABLE} (
     threshold         DOUBLE,
     severity          STRING,
     message           STRING,
-    status            STRING NOT NULL DEFAULT 'open'
+    status            STRING NOT NULL  COMMENT 'open | acknowledged | resolved — set explicitly by writers'
 )
 USING DELTA
 COMMENT 'Open trend alerts. Wire a Databricks SQL Alert to: SELECT COUNT(*) FROM this WHERE status=open.'
+-- Note: status uses no DEFAULT clause because that Delta feature is not enabled in this
+-- workspace. The alert insert below explicitly sets status='open' on every row.
 """)
 
 print("Created/verified: history, metrics, alerts tables")

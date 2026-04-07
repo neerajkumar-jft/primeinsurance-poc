@@ -69,13 +69,15 @@ CREATE TABLE IF NOT EXISTS {RESOLUTIONS_TABLE} (
     resolved_by       STRING  NOT NULL  COMMENT 'user email or system component name',
     resolved_at       TIMESTAMP         COMMENT 'when the resolution actually took effect (NULL while pending)',
     notes             STRING            COMMENT 'free-text context, optional',
-    created_at        TIMESTAMP NOT NULL DEFAULT current_timestamp()
+    created_at        TIMESTAMP NOT NULL  COMMENT 'set by writers to current UTC time on insert'
 )
 USING DELTA
 COMMENT 'Append-only audit log of every triage decision made against a quarantined record or rule violation. Phase 1.5 — quality resolution loop.'
 TBLPROPERTIES (
     'delta.enableChangeDataFeed' = 'true'
 )
+-- Note: created_at uses no DEFAULT clause because that Delta feature is not enabled in
+-- this workspace. Both helper functions below populate created_at explicitly on every write.
 """)
 
 print(f"Created/verified: {RESOLUTIONS_TABLE}")
@@ -143,6 +145,8 @@ def log_resolution(
     if resolved_at is None and final_status in ("resolved", "rejected"):
         resolved_at = datetime.utcnow()
 
+    created_at = datetime.utcnow()
+
     schema = StructType([
         StructField("source_table",     StringType(),    False),
         StructField("record_key",       StringType(),    True),
@@ -154,6 +158,7 @@ def log_resolution(
         StructField("resolved_by",      StringType(),    False),
         StructField("resolved_at",      TimestampType(), True),
         StructField("notes",            StringType(),    True),
+        StructField("created_at",       TimestampType(), False),
     ])
 
     row = [(
@@ -167,6 +172,7 @@ def log_resolution(
         resolved_by,
         resolved_at,
         notes,
+        created_at,
     )]
 
     (
@@ -188,10 +194,12 @@ def bulk_log_resolution(rows: Iterable[Mapping[str, Any]]) -> int:
     if not rows:
         return 0
 
+    now = datetime.utcnow()
+
     for r in rows:
         _validate(r["path_taken"], r["final_status"])
         if r.get("resolved_at") is None and r["final_status"] in ("resolved", "rejected"):
-            r["resolved_at"] = datetime.utcnow()
+            r["resolved_at"] = now
 
     schema = StructType([
         StructField("source_table",     StringType(),    False),
@@ -204,6 +212,7 @@ def bulk_log_resolution(rows: Iterable[Mapping[str, Any]]) -> int:
         StructField("resolved_by",      StringType(),    False),
         StructField("resolved_at",      TimestampType(), True),
         StructField("notes",            StringType(),    True),
+        StructField("created_at",       TimestampType(), False),
     ])
 
     tuples = [(
@@ -217,6 +226,7 @@ def bulk_log_resolution(rows: Iterable[Mapping[str, Any]]) -> int:
         r["resolved_by"],
         r.get("resolved_at"),
         r.get("notes"),
+        now,
     ) for r in rows]
 
     (
