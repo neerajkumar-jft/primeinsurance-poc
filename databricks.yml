@@ -349,6 +349,27 @@ resources:
               seed_owners: "auto"
             source: WORKSPACE
 
+    quality_rule_backfill:
+      name: PrimeInsurance_Quality_Rule_Backfill
+      tags:
+        project: primeinsurance-poc
+        phase: "1.5"
+        run: manual
+      tasks:
+        - task_key: rule_backfill
+          notebook_task:
+            notebook_path: ./notebooks/quality/35_dq_rule_backfill.py
+            base_parameters:
+              catalog: ${var.catalog}
+              quarantine_table: "quarantine_customers"
+              passing_filter_sql: "region IN ('East', 'West', 'Central', 'South', 'North')"
+              reason_code: "RULE_LOOSENED"
+              notes: "Rule was relaxed — see ticket #__"
+              rule_name: ""
+              performed_by: ""
+              dry_run: "true"
+            source: WORKSPACE
+
 # ============================================================
 # DEPLOYMENT TARGETS
 # ============================================================
