@@ -401,7 +401,10 @@ targets:
       pipelines:
         bronze_pipeline:
           development: false
+          serverless: true
         silver_pipeline:
           development: false
+          serverless: true
         gold_pipeline:
           development: false
+          serverless: true
