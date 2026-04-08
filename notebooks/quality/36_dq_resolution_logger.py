@@ -253,56 +253,71 @@ print("Helpers ready: log_resolution(...), bulk_log_resolution([...])")
 # MAGIC - swapped customer_6 columns → already handled in Silver, logged for audit
 # MAGIC - sales blank padding rows → permanent_reject (path 4)
 # MAGIC
-# MAGIC Re-running this notebook will append duplicate seed rows. Run once, or comment out
-# MAGIC the seed cell after first execution. Set `SEED_DEMO_ROWS = False` below to skip.
+# MAGIC **Idempotent**: the seed cell checks for rows tagged with
+# MAGIC `resolved_by = 'system_seed'` and skips if any are already present. This matters
+# MAGIC because other notebooks in the quality loop import this notebook via `%run`,
+# MAGIC which re-executes every cell — including this one. Without the check, every
+# MAGIC retention archiver / steward / backfill run would duplicate the seed rows.
+# MAGIC Set `SEED_DEMO_ROWS = False` to skip seeding entirely.
 
 # COMMAND ----------
 
 SEED_DEMO_ROWS = True
 
 if SEED_DEMO_ROWS:
-    seed_rows = [
-        dict(
-            source_table="quarantine_claims",
-            record_key=None,
-            rule_name="corrupted_dates",
-            path_taken="permanent_reject",
-            final_status="rejected",
-            reason_code="SOURCE_CORRUPTED",
-            affected_records=1000,
-            resolved_by="system",
-            notes="Claim date fields stored as '27:00.0' time-only strings at source. "
-                  "Unrecoverable. UC4 generates synthetic processing days at consumption layer only. "
-                  "See architecture.md known limitations.",
-        ),
-        dict(
-            source_table="quarantine_customers",
-            record_key=None,
-            rule_name="swapped_columns",
-            path_taken="rule_fix",
-            final_status="resolved",
-            reason_code="SOURCE_LAYOUT_FIX",
-            affected_records=199,
-            resolved_by="system",
-            notes="customers_6.csv: Marital_status and Education columns swapped. "
-                  "Silver pipeline detects file by name and swaps reads. Source ticket pending "
-                  "with the customers_6 owner for a permanent upstream fix.",
-        ),
-        dict(
-            source_table="quarantine_sales",
-            record_key=None,
-            rule_name="null_sales_id",
-            path_taken="permanent_reject",
-            final_status="rejected",
-            reason_code="EMPTY_PADDING_ROWS",
-            affected_records=3132,
-            resolved_by="system",
-            notes="62.9% of sales source rows are entirely empty padding from the export script. "
-                  "Source owner notified; awaiting fix to the export query to drop trailing blank rows.",
-        ),
-    ]
-    n = bulk_log_resolution(seed_rows)
-    print(f"Seeded {n} demo resolutions")
+    # Idempotency check — 'system_seed' is the sentinel value that distinguishes
+    # seed rows from real system-generated resolutions (which use 'system_*').
+    already_seeded = spark.sql(f"""
+        SELECT COUNT(*) AS c
+        FROM {RESOLUTIONS_TABLE}
+        WHERE resolved_by = 'system_seed'
+    """).collect()[0]["c"]
+
+    if already_seeded > 0:
+        print(f"Seed rows already present ({already_seeded}). Skipping to preserve idempotency.")
+    else:
+        seed_rows = [
+            dict(
+                source_table="quarantine_claims",
+                record_key=None,
+                rule_name="corrupted_dates",
+                path_taken="permanent_reject",
+                final_status="rejected",
+                reason_code="SOURCE_CORRUPTED",
+                affected_records=1000,
+                resolved_by="system_seed",
+                notes="Claim date fields stored as '27:00.0' time-only strings at source. "
+                      "Unrecoverable. UC4 generates synthetic processing days at consumption layer only. "
+                      "See architecture.md known limitations.",
+            ),
+            dict(
+                source_table="quarantine_customers",
+                record_key=None,
+                rule_name="swapped_columns",
+                path_taken="rule_fix",
+                final_status="resolved",
+                reason_code="SOURCE_LAYOUT_FIX",
+                affected_records=199,
+                resolved_by="system_seed",
+                notes="customers_6.csv: Marital_status and Education columns swapped. "
+                      "Silver pipeline detects file by name and swaps reads. Source ticket pending "
+                      "with the customers_6 owner for a permanent upstream fix.",
+            ),
+            dict(
+                source_table="quarantine_sales",
+                record_key=None,
+                rule_name="null_sales_id",
+                path_taken="permanent_reject",
+                final_status="rejected",
+                reason_code="EMPTY_PADDING_ROWS",
+                affected_records=3132,
+                resolved_by="system_seed",
+                notes="62.9% of sales source rows are entirely empty padding from the export script. "
+                      "Source owner notified; awaiting fix to the export query to drop trailing blank rows.",
+            ),
+        ]
+        n = bulk_log_resolution(seed_rows)
+        print(f"Seeded {n} demo resolutions")
 else:
     print("Seeding skipped (SEED_DEMO_ROWS = False)")
 
