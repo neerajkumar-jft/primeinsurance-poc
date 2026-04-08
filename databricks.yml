@@ -387,9 +387,21 @@ targets:
   prod:
     mode: production
     workspace:
-      host: ${DATABRICKS_PROD_HOST}
+      host: https://dbc-f47ab38f-95c2.cloud.databricks.com
+      root_path: /Workspace/Users/neeraj.kumar@jellyfishtechnologies.com/.bundle/${bundle.name}/${bundle.target}
     variables:
-      catalog: primeins_prod
-      warehouse_id: ${DATABRICKS_PROD_WAREHOUSE}
-    run_as:
-      service_principal_name: ${DATABRICKS_PROD_SP}
+      catalog: primeins
+      warehouse_id: 8d2c586aebb179ed
+    # run_as is intentionally omitted — jobs will run as the deploying user.
+    # Add a service_principal_name here once one is provisioned on this workspace:
+    #   run_as:
+    #     service_principal_name: <sp-application-id>
+    # The old dev workspace (dbc-095b6263) stays alive under the `dev` target.
+    resources:
+      pipelines:
+        bronze_pipeline:
+          development: false
+        silver_pipeline:
+          development: false
+        gold_pipeline:
+          development: false
