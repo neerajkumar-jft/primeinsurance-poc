@@ -27,11 +27,15 @@ import re
 from datetime import datetime
 from openai import OpenAI
 from pydantic import BaseModel, Field
-# Handle both pydantic v1 and v2
+# Handle both pydantic v1 and v2. v2 uses mode='before'; v1 uses pre=True.
 try:
-    from pydantic import field_validator
+    from pydantic import field_validator as _field_validator  # v2
+    def field_validator(*fields):
+        return _field_validator(*fields, mode='before')
 except ImportError:
-    from pydantic import validator as field_validator
+    from pydantic import validator as _field_validator  # v1
+    def field_validator(*fields):
+        return _field_validator(*fields, pre=True)
 from databricks.sdk import WorkspaceClient
 
 dbutils.widgets.text("catalog", "primeins")
@@ -94,7 +98,7 @@ class RAGAnswer(BaseModel):
     cited_policies: str = Field(min_length=2)
     confidence_explanation: str = Field(min_length=10)
 
-    @field_validator('answer', 'cited_policies', 'confidence_explanation', pre=True)
+    @field_validator('answer', 'cited_policies', 'confidence_explanation')
     @classmethod
     def clean_input(cls, v):
         if isinstance(v, str):
