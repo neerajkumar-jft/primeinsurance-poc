@@ -11,3 +11,10 @@ env:
     value: "ep-late-tooth-d8dc2eg6.database.us-east-2.cloud.databricks.com"
   - name: LAKEBASE_DATABASE
     value: "primeins"
+resources:
+  - name: lakebase_db
+    description: "PrimeInsurance Lakebase serving layer"
+    database:
+      instance_name: primeins-lakebase
+      database_name: primeins
+      permission: CAN_CONNECT_AND_CREATE

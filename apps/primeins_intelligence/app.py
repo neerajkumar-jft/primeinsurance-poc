@@ -28,10 +28,7 @@ import pandas as pd
 import psycopg2
 import streamlit as st
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.dashboards import (
-    GenieConversation,
-    GenieMessage,
-)
+from databricks.sdk.core import Config, oauth_service_principal
 
 # ============================================================
 # CONFIG
@@ -40,6 +37,8 @@ from databricks.sdk.service.dashboards import (
 GENIE_SPACE_ID = os.environ.get(
     "GENIE_SPACE_ID", "01f133db605b1751ae383aa34ce99dce"
 )
+# Databricks Apps with a `database` resource binding get these env vars
+# injected automatically. Local defaults only for dev.
 LAKEBASE_INSTANCE = os.environ.get(
     "LAKEBASE_INSTANCE_NAME", "primeins-lakebase"
 )
@@ -48,6 +47,13 @@ LAKEBASE_HOST = os.environ.get(
     "ep-late-tooth-d8dc2eg6.database.us-east-2.cloud.databricks.com",
 )
 LAKEBASE_DB = os.environ.get("LAKEBASE_DATABASE", "primeins")
+
+# Databricks Apps inject DATABRICKS_HOST / CLIENT_ID / CLIENT_SECRET when the
+# app has a workspace identity. We use OAuth M2M directly so the SP token is
+# scoped correctly for the database resource binding.
+DATABRICKS_HOST = os.environ.get("DATABRICKS_HOST", "")
+DATABRICKS_CLIENT_ID = os.environ.get("DATABRICKS_CLIENT_ID", "")
+DATABRICKS_CLIENT_SECRET = os.environ.get("DATABRICKS_CLIENT_SECRET", "")
 
 st.set_page_config(
     page_title="PrimeInsurance Data Intelligence",
@@ -66,31 +72,83 @@ def get_workspace_client() -> WorkspaceClient:
     return WorkspaceClient()
 
 
-@st.cache_resource(ttl=2400)  # token valid ~1 hour
-def get_lakebase_connection():
-    """Generate a fresh Lakebase credential and open a psycopg2 connection."""
-    w = get_workspace_client()
-    user = w.current_user.me().user_name
+def _fresh_lakebase_connection():
+    """Open a NEW psycopg2 connection to Lakebase using a database-scoped
+    credential generated specifically for this instance.
+
+    The generic OAuth M2M access token (from cfg.authenticate()) is rejected
+    by Lakebase because it's a workspace-API token, not a database-scoped
+    token. The Databricks Database API has a dedicated endpoint for
+    generating credentials that Lakebase Postgres will accept as passwords:
+    `POST /api/2.0/database/instances/credentials`.
+
+    When the app has a `database` resource binding with CAN_CONNECT_AND_CREATE
+    permission, the app's SP is authorized to call this endpoint for the
+    bound instance. The returned token is what Postgres accepts.
+    """
+    if not DATABRICKS_CLIENT_ID or not DATABRICKS_CLIENT_SECRET:
+        raise RuntimeError(
+            "DATABRICKS_CLIENT_ID / DATABRICKS_CLIENT_SECRET not present in env. "
+            "This app isn't running inside Databricks Apps, or the Lakebase "
+            "resource binding is missing."
+        )
+
+    host_url = DATABRICKS_HOST
+    if not host_url.startswith("http"):
+        host_url = f"https://{host_url}"
+
+    # Create a SP-authenticated WorkspaceClient explicitly. Auto-discovery
+    # from env vars should do the same, but being explicit avoids any
+    # ambiguity about which identity is making the call.
+    cfg = Config(
+        host=host_url,
+        client_id=DATABRICKS_CLIENT_ID,
+        client_secret=DATABRICKS_CLIENT_SECRET,
+    )
+    w = WorkspaceClient(config=cfg)
+
     cred = w.database.generate_database_credential(
         instance_names=[LAKEBASE_INSTANCE],
         request_id=f"app-{uuid.uuid4().hex[:8]}",
     )
-    conn = psycopg2.connect(
-        host=LAKEBASE_HOST,
-        port=5432,
-        dbname=LAKEBASE_DB,
-        user=user,
-        password=cred.token,
-        sslmode="require",
-    )
+    db_token = cred.token
+
+    # Decode the JWT payload (no verification — just inspection) so we can
+    # surface sub/aud/scope in the diagnostic panel if auth fails.
+    import base64, json as _json
+    try:
+        parts = db_token.split(".")
+        if len(parts) >= 2:
+            pad = "=" * (4 - len(parts[1]) % 4)
+            jwt_payload = _json.loads(base64.urlsafe_b64decode(parts[1] + pad))
+            st.session_state["_jwt_payload"] = jwt_payload
+    except Exception:
+        pass
+
+    try:
+        conn = psycopg2.connect(
+            host=LAKEBASE_HOST,
+            port=5432,
+            dbname=LAKEBASE_DB,
+            user=DATABRICKS_CLIENT_ID,
+            password=db_token,
+            sslmode="require",
+        )
+    except Exception:
+        # Attach diagnostic info to the exception chain via session_state
+        st.session_state["_attempted_user"] = DATABRICKS_CLIENT_ID
+        raise
     conn.autocommit = True
-    return conn
+    return conn, DATABRICKS_CLIENT_ID
 
 
 def query_lakebase(sql: str) -> pd.DataFrame:
     """Run a read-only SQL query against the Lakebase serving layer."""
-    conn = get_lakebase_connection()
-    return pd.read_sql_query(sql, conn)
+    conn, _ = _fresh_lakebase_connection()
+    try:
+        return pd.read_sql_query(sql, conn)
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -120,10 +178,57 @@ try:
     c3.metric("Rejected claims", f"{kpi['rejected']:,}", help=f"{round(kpi['rejected']*100/max(kpi['claims'],1),1)}% rejection rate")
     c4.metric("Aging inventory", f"{kpi['aging_inventory']:,}", help="Stale (60–90d) + Critical (>90d) unsold listings from fact_sales_enriched")
 except Exception as exc:
-    st.warning(
-        f"Lakebase KPIs unavailable: {exc}. The app can still answer Genie "
-        "questions — Genie queries the SQL warehouse directly."
-    )
+    import traceback
+    with st.expander("⚠️  Lakebase KPIs unavailable — click for diagnostic details", expanded=True):
+        st.warning(
+            f"Connection error: `{exc}`\n\n"
+            "The app can still answer Genie questions — Genie queries the SQL warehouse directly."
+        )
+        try:
+            w = get_workspace_client()
+            me = w.current_user.me()
+            st.caption(
+                f"me.user_name: `{me.user_name}` · "
+                f"me.id: `{getattr(me,'id','?')}` · "
+                f"me.display_name: `{getattr(me,'display_name','?')}` · "
+                f"me.active: `{getattr(me,'active','?')}`"
+            )
+        except Exception:
+            pass
+
+        # Show the JWT payload of the DB credential token (if generated)
+        jwt_payload = st.session_state.get("_jwt_payload")
+        if jwt_payload:
+            st.write("**JWT payload from `generate_database_credential`:**")
+            st.json(jwt_payload)
+            st.caption(
+                f"psycopg2 user= parameter sent: `{st.session_state.get('_attempted_user','?')}`"
+            )
+            st.caption(
+                "If `sub` in the JWT does not match the `user=` parameter, "
+                "that is the auth mismatch."
+            )
+
+        # Dump env vars related to Databricks / Lakebase
+        import os
+        interesting_keys = sorted([
+            k for k in os.environ.keys()
+            if any(k.startswith(p) for p in
+                   ("DATABRICKS", "PG", "DB_", "LAKEBASE",
+                    "DATABASE", "APP_", "POSTGRES"))
+        ])
+        st.write("**Injected environment variables visible to the app:**")
+        env_rows = []
+        for k in interesting_keys:
+            v = os.environ[k]
+            disp = v if len(v) <= 80 else v[:40] + "…" + v[-20:]
+            env_rows.append({"var": k, "value": disp})
+        if env_rows:
+            st.dataframe(pd.DataFrame(env_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("(none found with these prefixes)")
+
+        st.code(traceback.format_exc(), language="python")
 
 st.divider()
 
