@@ -14,7 +14,7 @@ Each section maps directly to a text-area field in the submission.
 ### Q: What additional context would make the data more useful to the business user? What column did you add, and why did you choose it for your use case?
 
 The column we added is **`aging_bucket`** in the view
-`primeins_lakebase.primeins.public.fact_sales_enriched`. It bucketizes every
+`primeins_lakebase.public.fact_sales_enriched`. It bucketizes every
 unsold car listing by `days_listed` into four business-meaningful states:
 
 | `days_listed` | `aging_bucket` | Business meaning |
