@@ -35,7 +35,7 @@ from databricks.sdk.core import Config, oauth_service_principal
 # ============================================================
 
 GENIE_SPACE_ID = os.environ.get(
-    "GENIE_SPACE_ID", "01f133db605b1751ae383aa34ce99dce"
+    "GENIE_SPACE_ID", "01f133e63d4d141cad9ba61f50ccebf7"
 )
 # Databricks Apps with a `database` resource binding get these env vars
 # injected automatically. Local defaults only for dev.

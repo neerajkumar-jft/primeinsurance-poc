@@ -4,7 +4,7 @@ command:
   - app.py
 env:
   - name: GENIE_SPACE_ID
-    value: "01f133db605b1751ae383aa34ce99dce"
+    value: "01f133e63d4d141cad9ba61f50ccebf7"
   - name: LAKEBASE_INSTANCE_NAME
     value: "primeins-lakebase"
   - name: LAKEBASE_HOST
