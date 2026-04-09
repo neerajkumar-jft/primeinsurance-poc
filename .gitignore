@@ -5,3 +5,9 @@ __pycache__/
 *.egg-info/
 .sfdx/
 .databricks/
+
+# Local-only Genie space context — not synced to git.
+# The genie/ directory holds the portable definition used to bootstrap a
+# Genie space in any workspace via the UI, but is kept out of the repo per
+# team decision.
+genie/
