@@ -349,6 +349,23 @@ resources:
               seed_owners: "auto"
             source: WORKSPACE
 
+    # ── Phase 2 serving layer ──
+
+    serving_lakebase_load:
+      name: PrimeInsurance_Serving_Lakebase_Load
+      tags:
+        project: primeinsurance-poc
+        phase: "2"
+      tasks:
+        - task_key: lakebase_direct_load
+          notebook_task:
+            notebook_path: ./notebooks/serving/40_lakebase_direct_load.py
+            base_parameters:
+              catalog: ${var.catalog}
+              instance_name: primeins-lakebase
+              database_name: primeins
+            source: WORKSPACE
+
     quality_rule_backfill:
       name: PrimeInsurance_Quality_Rule_Backfill
       tags:
