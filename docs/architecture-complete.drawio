@@ -174,19 +174,37 @@
         </mxCell>
         <!-- ROW 5: SERVING + GEN AI side by side -->
         <mxCell id="df_serving_box" value="" style="rounded=1;whiteSpace=wrap;fillColor=#E8FFE8;fillOpacity=30;strokeColor=#2E8B57;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="40" y="740" width="600" height="130" as="geometry" />
+          <mxGeometry x="40" y="740" width="600" height="180" as="geometry" />
         </mxCell>
-        <mxCell id="df_serving_title" value="Serving Layer — SQL Warehouse + Genie" style="text;html=1;fontSize=12;fontStyle=1;align=left;fontColor=#2E8B57;" vertex="1" parent="1">
+        <mxCell id="df_serving_title" value="Serving &amp; Application Layer" style="text;html=1;fontSize=12;fontStyle=1;align=left;fontColor=#2E8B57;" vertex="1" parent="1">
           <mxGeometry x="55" y="745" width="400" height="22" as="geometry" />
         </mxCell>
         <mxCell id="df_serv_wh" value="SQL Warehouse&#xa;Fast concurrent reads&#xa;20+ simultaneous users&#xa;Separate from pipeline compute" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#2E8B57;align=left;spacingLeft=5;" vertex="1" parent="1">
-          <mxGeometry x="60" y="775" width="170" height="60" as="geometry" />
+          <mxGeometry x="60" y="775" width="140" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="df_serv_genie" value="Databricks Genie Space&#xa;Natural language → SQL&#xa;Tables: dim_policy, dim_customer, fact_claims&#xa;Context instructions explain schema" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#2E8B57;align=left;spacingLeft=5;" vertex="1" parent="1">
-          <mxGeometry x="245" y="775" width="220" height="60" as="geometry" />
+        <mxCell id="df_serv_genie" value="Genie Space (5 tables)&#xa;Natural language → SQL&#xa;12 example SQLs&#xa;10/10 tested questions" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#2E8B57;align=left;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="210" y="775" width="165" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="df_serv_dash" value="Dashboards&#xa;Claims review&#xa;Compliance DQ&#xa;Inventory aging&#xa;Executive summary" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#2E8B57;align=left;spacingLeft=5;" vertex="1" parent="1">
-          <mxGeometry x="480" y="775" width="120" height="60" as="geometry" />
+        <mxCell id="df_serv_dash" value="Dashboards&#xa;Executive KPIs (1 pg)&#xa;Business Intel (4 tabs)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFFFFF;strokeColor=#2E8B57;align=left;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="385" y="775" width="120" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="df_serv_lakebase" value="Lakebase (Managed Postgres)&#xa;6 Gold tables synced&#xa;fact_sales_enriched view&#xa;aging_bucket column added&#xa;Standard Postgres driver" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E8F5E9;strokeColor=#0D6E8C;strokeWidth=2;align=left;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="60" y="840" width="210" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="df_serv_app" value="Databricks App&#xa;Streamlit · primeins-intelligence&#xa;KPI tiles from Lakebase&#xa;Genie Q&amp;A via API&#xa;One URL for all business users" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E8F5E9;strokeColor=#0D6E8C;strokeWidth=2;align=left;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="285" y="840" width="220" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="df_serv_lakebase_label" value="Phase 2: Serving Layer + Application (added today)" style="text;html=1;fontSize=9;fontStyle=3;align=left;fontColor=#0D6E8C;" vertex="1" parent="1">
+          <mxGeometry x="515" y="855" width="300" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="df_arrow_gold_lakebase" value="psycopg2&#xa;bulk load" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#0D6E8C;fontStyle=2;fontSize=8;fontColor=#0D6E8C;" edge="1" parent="1" source="df_gold_box" target="df_serv_lakebase">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="df_arrow_lakebase_app" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#0D6E8C;" edge="1" parent="1" source="df_serv_lakebase" target="df_serv_app">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="df_arrow_genie_app" value="Genie API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#2E8B57;fontStyle=2;fontSize=8;fontColor=#2E8B57;" edge="1" parent="1" source="df_serv_genie" target="df_serv_app">
+          <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="df_genai_box" value="" style="rounded=1;whiteSpace=wrap;fillColor=#E6F3FF;fillOpacity=30;strokeColor=#4A90D9;strokeWidth=2;" vertex="1" parent="1">
           <mxGeometry x="680" y="740" width="880" height="130" as="geometry" />
@@ -212,22 +230,22 @@
         <!-- ROW 6: USERS -->
         <mxCell id="df_arr5" value="" style="shape=flexArrow;endArrow=classic;startArrow=none;strokeWidth=1;fillColor=#333333;strokeColor=#333333;" edge="1" parent="1">
           <mxGeometry relative="1" as="geometry">
-            <mxPoint x="340" y="870" as="sourcePoint" />
-            <mxPoint x="340" y="900" as="targetPoint" />
+            <mxPoint x="340" y="930" as="sourcePoint" />
+            <mxPoint x="340" y="960" as="targetPoint" />
           </mxGeometry>
         </mxCell>
         <mxCell id="df_users_box" value="" style="rounded=1;whiteSpace=wrap;fillColor=#F0F0F0;strokeColor=#333333;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="40" y="900" width="600" height="70" as="geometry" />
+          <mxGeometry x="40" y="960" width="600" height="70" as="geometry" />
         </mxCell>
         <mxCell id="df_users_title" value="Business Users" style="text;html=1;fontSize=12;fontStyle=1;align=left;" vertex="1" parent="1">
-          <mxGeometry x="55" y="905" width="150" height="22" as="geometry" />
+          <mxGeometry x="55" y="965" width="150" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="df_users_list" value="Operations team (claims dashboard, morning standups)  |  Compliance team (DQ reports, audit trail)  |  Executives (AI summaries, KPIs)  |  Analysts (Genie NLQ, ad-hoc queries)" style="text;html=1;fontSize=9;align=left;fontStyle=2;" vertex="1" parent="1">
-          <mxGeometry x="55" y="930" width="570" height="30" as="geometry" />
+        <mxCell id="df_users_list" value="Compliance officer (Genie: 'how many customers?')  |  Claims manager (app: rejection rate, fraud flags)  |  Sales head (app: 176 aging cars)  |  Analysts (Genie NLQ, dashboards)" style="text;html=1;fontSize=9;align=left;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="55" y="990" width="570" height="30" as="geometry" />
         </mxCell>
         <!-- Unity Catalog banner -->
         <mxCell id="df_uc_bar" value="Unity Catalog — governance, access control (Engineers: all layers | Compliance: Gold only | Analysts: Gold via SQL Warehouse), lineage tracking (automatic, source file → Gold)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=10;fillColor=#1E3A5F;fontColor=#FFFFFF;strokeColor=#1E3A5F;" vertex="1" parent="1">
-          <mxGeometry x="40" y="1000" width="1520" height="35" as="geometry" />
+          <mxGeometry x="40" y="1060" width="1520" height="35" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
